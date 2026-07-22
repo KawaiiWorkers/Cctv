@@ -1,0 +1,159 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Admin Dashboard</title>
+<style>
+  body{margin:0;font-family:sans-serif;background:#0d0f14;color:#eee;overflow-x:hidden;}
+  header{background:#1a1f2b;padding:14px 22px;display:flex;justify-content:space-between;align-items:center}
+  header h1{margin:0;font-size:18px}
+  header a{color:#4af;text-decoration:none;margin-left:16px}
+  main{padding:20px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+  .cam{background:#1a1f2b;border-radius:10px;overflow:hidden;position:relative}
+  .cam-img-container{position:relative; cursor:pointer;}
+  .cam img{width:100%;display:block;background:#000;aspect-ratio:4/3;object-fit:cover}
+  .cam-overlay{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; 
+               background:rgba(0,0,0,0.6); color:#fff; font-size:22px; font-weight:bold; opacity:0; transition:opacity 0.2s;}
+  .cam-img-container:hover .cam-overlay {opacity: 1;}
+  .cam .meta{padding:10px 12px;display:flex;justify-content:space-between;font-size:13px}
+  .badge{padding:2px 8px;border-radius:20px;font-size:11px;font-weight:bold}
+  .on{background:#093;color:#fff}.off{background:#933;color:#fff}
+  .empty{opacity:.6;text-align:center;padding:60px}
+  
+  /* WebRTC Fullscreen Modal */
+  #webrtc-modal {display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:#000; z-index:9999;}
+  #webrtc-video {width:100%; height:100%; object-fit:contain; background:#000;}
+  .close-btn {position:absolute; top:20px; right:20px; z-index:10000; padding:12px 24px; background:#f55; color:#fff; border:none; border-radius:8px; font-weight:bold; cursor:pointer;}
+</style>
+</head>
+<body>
+<header>
+  <h1>📹 CCTV Admin Dashboard</h1>
+  <div>
+    <a href="/dashboard">Live</a>
+    <a href="/footage">Footage</a>
+    <a href="/logout">Logout</a>
+  </div>
+</header>
+
+<main>
+  <div id="grid" class="grid"></div>
+  <div id="empty" class="empty">Waiting for cameras… open <code>/camera</code> on a phone.</div>
+</main>
+
+<div id="webrtc-modal">
+    <button class="close-btn" onclick="closeFullscreen()">Close HD Stream</button>
+    <video id="webrtc-video" autoplay playsinline controls></video>
+</div>
+
+<script>
+let activePc = null;
+let icePoll = null;
+let ansPoll = null;
+
+async function openFullscreen(camId) {
+    const modal = document.getElementById("webrtc-modal");
+    const vid = document.getElementById("webrtc-video");
+    modal.style.display = "block";
+    vid.srcObject = null;
+
+    if (modal.requestFullscreen) {
+        try { await modal.requestFullscreen(); } catch(e){}
+    }
+
+    if (activePc) activePc.close();
+    if (icePoll) clearInterval(icePoll);
+    if (ansPoll) clearInterval(ansPoll);
+
+    activePc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    activePc.addTransceiver('video', { direction: 'recvonly' });
+    activePc.addTransceiver('audio', { direction: 'recvonly' });
+
+    activePc.ontrack = e => {
+        if (vid.srcObject !== e.streams[0]) {
+            vid.srcObject = e.streams[0];
+            vid.play();
+        }
+    };
+
+    activePc.onicecandidate = e => {
+        if (e.candidate) {
+            fetch(`/webrtc/${camId}/admin_ice`, { method: 'POST', body: JSON.stringify(e.candidate) });
+        }
+    };
+
+    const offer = await activePc.createOffer();
+    await activePc.setLocalDescription(offer);
+
+    await fetch(`/webrtc/${camId}/offer`, { method: 'POST', body: JSON.stringify(activePc.localDescription) });
+
+    ansPoll = setInterval(async () => {
+        const r = await fetch(`/webrtc/${camId}/answer`);
+        const ans = await r.json();
+        if (ans) {
+            clearInterval(ansPoll);
+            await activePc.setRemoteDescription(new RTCSessionDescription(ans));
+
+            icePoll = setInterval(async () => {
+                if (activePc.signalingState === "closed") { clearInterval(icePoll); return; }
+                const r2 = await fetch(`/webrtc/${camId}/cam_ice`);
+                const cands = await r2.json();
+                cands.forEach(c => activePc.addIceCandidate(new RTCIceCandidate(c)));
+            }, 2000);
+        }
+    }, 1000);
+}
+
+function closeFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    document.getElementById("webrtc-modal").style.display = "none";
+    if (activePc) { activePc.close(); activePc = null; }
+    if (icePoll) { clearInterval(icePoll); icePoll = null; }
+    if (ansPoll) { clearInterval(ansPoll); ansPoll = null; }
+    document.getElementById("webrtc-video").srcObject = null;
+}
+
+async function tick() {
+  const r = await fetch("/api/cameras");
+  const cams = await r.json();
+  const grid  = document.getElementById("grid");
+  const empty = document.getElementById("empty");
+  empty.style.display = cams.length ? "none" : "block";
+
+  const ids = new Set(cams.map(c => c.id));
+  [...grid.children].forEach(el => { if (!ids.has(el.dataset.id)) el.remove(); });
+
+  cams.forEach(c => {
+    let el = grid.querySelector(`[data-id="${c.id}"]`);
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "cam";
+      el.dataset.id = c.id;
+      el.innerHTML = `
+        <div class="cam-img-container" onclick="openFullscreen('${c.id}')">
+            <img alt="preview" />
+            <div class="cam-overlay">▶ Go Live HD</div>
+        </div>
+        <div class="meta">
+          <span><b>${c.name}</b><br><small>${c.id}</small></span>
+          <span class="badge"></span>
+        </div>
+        <div class="meta"><small>last seen: <span class="ls"></span></small></div>`;
+      grid.appendChild(el);
+    }
+    el.querySelector(".badge").textContent = c.online ? "ONLINE" : "OFFLINE";
+    el.querySelector(".badge").className = "badge " + (c.online ? "on":"off");
+    el.querySelector(".ls").textContent = c.last_seen;
+    
+    // Only refresh thumbnail if not currently viewing full screen
+    if(document.getElementById("webrtc-modal").style.display !== "block"){
+        el.querySelector("img").src = "/preview/" + c.id + "?t=" + Date.now();
+    }
+  });
+}
+tick();
+setInterval(tick, 3000);
+</script>
+</body>
+</html>
