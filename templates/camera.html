@@ -1,0 +1,212 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>CCTV Camera</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#000;color:#eee;font-family:sans-serif;overflow:hidden}
+  #video{width:100vw;height:100vh;object-fit:cover;background:#000}
+  #hud{position:fixed;top:10px;left:10px;right:10px;display:flex;justify-content:space-between;
+       font-size:13px;background:rgba(0,0,0,.45);padding:8px 12px;border-radius:8px;z-index:5}
+  #startBtn{position:fixed;inset:0;margin:auto;width:220px;height:70px;font-size:20px;
+            background:#4af;color:#000;border:0;border-radius:12px;font-weight:bold;z-index:10}
+  #rec{color:#f55;font-weight:bold}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#f00;margin-right:6px;
+       animation:blink 1s infinite}
+  @keyframes blink{50%{opacity:.2}}
+</style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline muted></video>
+
+<div id="hud" style="display:none">
+  <span id="camname">📷 Camera</span>
+  <span id="rec"><span class="dot"></span>REC 00:00</span>
+  <span id="net">🟢 online</span>
+  <span id="queue">Queue: 0</span>
+</div>
+
+<button id="startBtn">🔴 Start Camera</button>
+
+<script>
+const CHUNK_MINUTES = 10;                     
+const CHUNK_MS      = CHUNK_MINUTES * 60 * 1000;
+const PREVIEW_MS    = 3000; // Reduced HTTP preview rate since WebRTC handles live view
+
+const cameraId = (() => {
+  let id = localStorage.getItem("cctv_cam_id");
+  if (!id) { id = "cam-" + Math.random().toString(36).slice(2,8); localStorage.setItem("cctv_cam_id", id); }
+  return id;
+})();
+const cameraName = "Phone-" + cameraId.slice(-4);
+document.getElementById("camname").textContent = "📷 " + cameraName;
+
+let stream, recorder, previewTimer, recStart;
+let queueDB;
+
+// WebRTC State
+let pc = null;
+let lastOfferId = -1;
+let icePoll = null;
+
+function openDB() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("cctv-queue", 1);
+    r.onupgradeneeded = e => e.target.result.createObjectStore("chunks", {keyPath:"id", autoIncrement:true});
+    r.onsuccess = e => res(e.target.result);
+    r.onerror   = e => rej(e);
+  });
+}
+function dbAdd(item)   { return new Promise(res => { const t = queueDB.transaction("chunks","readwrite"); t.objectStore("chunks").add(item); t.oncomplete = res; }); }
+function dbAll()       { return new Promise(res => { const t = queueDB.transaction("chunks","readonly");  const req = t.objectStore("chunks").getAll(); req.onsuccess = () => res(req.result); }); }
+function dbDel(id)     { return new Promise(res => { const t = queueDB.transaction("chunks","readwrite"); t.objectStore("chunks").delete(id); t.oncomplete = res; }); }
+function dbCount()     { return new Promise(res => { const t = queueDB.transaction("chunks","readonly");  const req = t.objectStore("chunks").count(); req.onsuccess = () => res(req.result); }); }
+
+async function updateQueueBadge() {
+  const n = await dbCount();
+  document.getElementById("queue").textContent = "Queue: " + n;
+}
+
+async function uploadChunk(blob, startedAt) {
+  const fd = new FormData();
+  fd.append("camera_id",  cameraId);
+  fd.append("name",       cameraName);
+  fd.append("started_at", startedAt);
+  fd.append("video",      blob, "chunk.webm");
+  const r = await fetch("/upload", { method:"POST", body: fd });
+  if (!r.ok) throw new Error("upload failed " + r.status);
+  return r.json();
+}
+
+async function saveOrUpload(blob, startedAt) {
+  if (navigator.onLine) {
+    try { await uploadChunk(blob, startedAt); return; }
+    catch(e) { console.warn("upload failed, queueing", e); }
+  }
+  await dbAdd({ blob, startedAt, ts: Date.now() });
+  updateQueueBadge();
+}
+
+async function flushQueue() {
+  if (!navigator.onLine) return;
+  const items = await dbAll();
+  for (const it of items) {
+    try {
+      await uploadChunk(it.blob, it.startedAt);
+      await dbDel(it.id);
+      updateQueueBadge();
+    } catch(e) { return; }
+  }
+}
+
+window.addEventListener("online",  () => { document.getElementById("net").textContent = "🟢 online";  flushQueue(); });
+window.addEventListener("offline", () => { document.getElementById("net").textContent = "🔴 offline"; });
+
+function startPreview(videoEl) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 320; canvas.height = 240;
+  const ctx = canvas.getContext("2d");
+  previewTimer = setInterval(() => {
+    if (!videoEl.videoWidth) return;
+    ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(async blob => {
+      if (!blob || !navigator.onLine) return;
+      try {
+        await fetch(`/frame/${cameraId}?name=${encodeURIComponent(cameraName)}`, { method:"POST", body: blob });
+      } catch(e) {}
+    }, "image/jpeg", 0.55);
+  }, PREVIEW_MS);
+}
+
+function startRecordingLoop() {
+  function startOneChunk() {
+    const startedAt = new Date().toISOString();
+    recStart = Date.now();
+    const parts = [];
+    const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus") ? "video/webm;codecs=vp8,opus" : "video/webm";
+    recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 800_000 });
+    recorder.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+    recorder.onstop = async () => {
+      const blob = new Blob(parts, { type: mime });
+      saveOrUpload(blob, startedAt);
+      startOneChunk();
+    };
+    recorder.start();
+    setTimeout(() => { try { recorder.state === "recording" && recorder.stop(); } catch(e){} }, CHUNK_MS);
+  }
+  startOneChunk();
+
+  setInterval(() => {
+    const s = Math.floor((Date.now() - recStart)/1000);
+    const mm = String(Math.floor(s/60)).padStart(2,"0");
+    const ss = String(s%60).padStart(2,"0");
+    document.getElementById("rec").innerHTML = `<span class="dot"></span>REC ${mm}:${ss}`;
+  }, 1000);
+}
+
+// WebRTC Peer Connection Poller
+async function checkWebRTC() {
+  try {
+    const r = await fetch(`/webrtc/${cameraId}/offer`);
+    const data = await r.json();
+    if (data && data.offer && data.id !== lastOfferId) {
+      lastOfferId = data.id;
+      if (pc) pc.close();
+      if (icePoll) clearInterval(icePoll);
+
+      pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          fetch(`/webrtc/${cameraId}/cam_ice`, { method: 'POST', body: JSON.stringify(e.candidate) });
+        }
+      };
+
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      await fetch(`/webrtc/${cameraId}/answer`, { method: 'POST', body: JSON.stringify(pc.localDescription) });
+
+      icePoll = setInterval(async () => {
+        if (pc.signalingState === "closed") { clearInterval(icePoll); return; }
+        const r2 = await fetch(`/webrtc/${cameraId}/admin_ice`);
+        const cands = await r2.json();
+        cands.forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)));
+      }, 2000);
+    }
+  } catch(e) {}
+}
+
+document.getElementById("startBtn").onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" }, width:{ideal:1280}, height:{ideal:720} },
+      audio: true
+    });
+    document.getElementById("video").srcObject = stream;
+    document.getElementById("startBtn").style.display = "none";
+    document.getElementById("hud").style.display = "flex";
+
+    queueDB = await openDB();
+    updateQueueBadge();
+    flushQueue();                 
+    setInterval(flushQueue, 30000);
+
+    startPreview(document.getElementById("video"));
+    startRecordingLoop();
+    
+    // Start listening for Admin Live View requests
+    setInterval(checkWebRTC, 2000);
+
+    if ("wakeLock" in navigator) { try { await navigator.wakeLock.request("screen"); } catch(e){} }
+  } catch(err) {
+    alert("Camera permission denied:\n" + err.message);
+  }
+};
+</script>
+</body>
+</html>
