@@ -1,292 +1,496 @@
 """
-CCTV Monitoring System - WebRTC & Supabase Edition
-==================================================
+Real-Time CCTV & Surveillance Web App
+Flask + WebRTC + Supabase
 """
-
 import os
+import io
+import json
 import time
+import uuid
 import threading
-from datetime import datetime
+import hashlib
+from datetime import datetime, timezone, timedelta
 from functools import wraps
 
 from flask import (
-    Flask, request, render_template, redirect, url_for,
-    session, jsonify, Response, abort
+    Flask, render_template, request, jsonify, session,
+    redirect, url_for, Response, abort, send_file
 )
+from werkzeug.security import generate_password_hash, check_password_hash
+from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# ---------- Config ----------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ENV_PATH = os.path.join(BASE_DIR, ".env")
+load_dotenv()
 
-if os.path.exists(ENV_PATH):
-    with open(ENV_PATH) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
-
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-SECRET_KEY     = os.environ.get("SECRET_KEY", "change-me")
-
-# Supabase Config
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-supabase: Client = None
-if SUPABASE_URL and SUPABASE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-else:
-    print("[WARNING] Supabase URL or KEY is missing. Uploads will fail.")
-
-# ---------- App ----------
+# ──────────────────────────────────────────────────────────────────
+# Configuration
+# ──────────────────────────────────────────────────────────────────
 app = Flask(__name__)
-app.secret_key = SECRET_KEY
-app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024   # 500 MB max chunk
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB max chunk upload
 
-# State Management
-cameras = {}
-webrtc_signals = {}
-cameras_lock = threading.Lock()
-CAMERA_TIMEOUT = 15 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "footages")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD_HASH = generate_password_hash(os.getenv("ADMIN_PASSWORD", "admin"))
 
-# ---------- Helpers ----------
-def login_required(fn):
-    @wraps(fn)
-    def wrapper(*a, **kw):
-        if not session.get("admin"):
-            return redirect(url_for("admin_login"))
-        return fn(*a, **kw)
-    return wrapper
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL else None
 
-def touch_camera(cam_id, name=None, frame=None):
-    with cameras_lock:
-        entry = cameras.setdefault(cam_id, {"last_seen": 0, "last_frame": None, "name": cam_id})
-        entry["last_seen"] = time.time()
-        if name:
-            entry["name"] = name
-        if frame is not None:
-            entry["last_frame"] = frame
+# ──────────────────────────────────────────────────────────────────
+# Thread-Safe In-Memory State
+# ──────────────────────────────────────────────────────────────────
+_state_lock = threading.RLock()
 
-def get_live_cameras():
-    now = time.time()
-    out = []
-    with cameras_lock:
-        for cid, info in cameras.items():
-            online = (now - info["last_seen"]) < CAMERA_TIMEOUT
-            out.append({
-                "id": cid,
-                "name": info["name"],
-                "online": online,
-                "last_seen": datetime.fromtimestamp(info["last_seen"]).strftime("%Y-%m-%d %H:%M:%S"),
-            })
-    return out
+# camera_id -> {info}
+CAMERAS = {}
+# camera_id -> [ {candidate} ]  (incoming ICE candidates for camera)
+CAMERA_ICE = {}
+# session_id -> {offer, camera_id, answer, created_at}
+WEBRTC_SESSIONS = {}
+# admin_id -> [ {candidate, session_id} ] (incoming ICE for admin)
+ADMIN_ICE = {}
 
-# ============================================================
-# ROUTES
-# ============================================================
+CAMERA_TTL = 45  # seconds before camera considered offline
+SESSION_TTL = 60  # seconds for webrtc session cleanup
 
+
+def cleanup_loop():
+    """Background thread that removes stale cameras and expired sessions."""
+    while True:
+        time.sleep(15)
+        now = time.time()
+        with _state_lock:
+            stale_cams = [
+                cid for cid, info in CAMERAS.items()
+                if now - info.get("last_ping", 0) > CAMERA_TTL
+            ]
+            for cid in stale_cams:
+                CAMERAS.pop(cid, None)
+                CAMERA_ICE.pop(cid, None)
+                print(f"[cleanup] Removed stale camera {cid}")
+
+            stale_sessions = [
+                sid for sid, sess in WEBRTC_SESSIONS.items()
+                if now - sess.get("created_at", 0) > SESSION_TTL and sess.get("answer")
+            ]
+            for sid in stale_sessions:
+                WEBRTC_SESSIONS.pop(sid, None)
+                print(f"[cleanup] Removed expired webrtc session {sid}")
+
+
+threading.Thread(target=cleanup_loop, daemon=True).start()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Auth Decorators
+# ──────────────────────────────────────────────────────────────────
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("is_admin"):
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+def api_login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("is_admin"):
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ──────────────────────────────────────────────────────────────────
+# Page Routes
+# ──────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return """
-    <html><head><title>CCTV System</title>
-    <style>body{font-family:sans-serif;background:#111;color:#eee;text-align:center;padding:60px}
-    a{color:#4af;font-size:22px;display:block;margin:20px}</style></head>
-    <body>
-    <h1>🎥 CCTV Monitoring System</h1>
-    <a href="/camera">📱 Turn this device into a camera</a>
-    <a href="/admin">🔒 Admin login</a>
-    </body></html>
-    """
+    if session.get("is_admin"):
+        return redirect(url_for("dashboard"))
+    return redirect(url_for("login"))
 
-@app.route("/camera")
-def camera_page():
-    return render_template("camera.html")
 
-@app.route("/frame/<cam_id>", methods=["POST"])
-def upload_frame(cam_id):
-    name  = request.args.get("name", cam_id)
-    data  = request.get_data()
-    if data:
-        touch_camera(cam_id, name=name, frame=data)
-    return "ok"
-
-@app.route("/preview/<cam_id>")
-@login_required
-def get_preview(cam_id):
-    with cameras_lock:
-        info = cameras.get(cam_id)
-        frame = info["last_frame"] if info else None
-    if not frame:
-        abort(404)
-    return Response(frame, mimetype="image/jpeg")
-
-@app.route("/upload", methods=["POST"])
-def upload_chunk():
-    cam_id     = request.form.get("camera_id", "unknown")
-    started_at = request.form.get("started_at")   
-    file       = request.files.get("video")
-    
-    if not file:
-        return jsonify(ok=False, error="no file"), 400
-
-    try:
-        ts = datetime.fromisoformat(started_at.replace("Z", ""))
-    except Exception:
-        ts = datetime.utcnow()
-
-    safe_cam = "".join(c for c in cam_id if c.isalnum() or c in "-_")[:40] or "cam"
-    fname = f"{safe_cam}_{ts.strftime('%Y-%m-%d_%H-%M-%S')}.webm"
-    
-    if supabase:
-        try:
-            file_bytes = file.read()
-            supabase.storage.from_("footages").upload(
-                path=fname, 
-                file=file_bytes, 
-                file_options={"content-type": "video/webm"}
-            )
-        except Exception as e:
-            print(f"[Supabase Upload Error] {e}")
-            return jsonify(ok=False, error=str(e)), 500
-
-    touch_camera(cam_id, name=request.form.get("name", cam_id))
-    return jsonify(ok=True, file=fname)
-
-# ---------- WebRTC Signaling ----------
-@app.route("/webrtc/<cam_id>/<action>", methods=["GET", "POST"])
-def webrtc_signaling(cam_id, action):
-    with cameras_lock:
-        if cam_id not in webrtc_signals:
-            webrtc_signals[cam_id] = {'offer': None, 'answer': None, 'admin_ice': [], 'cam_ice': [], 'offer_id': 0}
-        sig = webrtc_signals[cam_id]
-
+@app.route("/login", methods=["GET", "POST"])
+def login():
     if request.method == "POST":
-        data = request.get_json(force=True)
-        if action == "offer":
-            sig['offer'] = data
-            sig['answer'] = None
-            sig['admin_ice'].clear()
-            sig['cam_ice'].clear()
-            sig['offer_id'] += 1
-        elif action == "answer":
-            sig['answer'] = data
-        elif action == "admin_ice":
-            sig['admin_ice'].append(data)
-        elif action == "cam_ice":
-            sig['cam_ice'].append(data)
-        return jsonify(ok=True)
-    else:
-        if action == "offer":
-            return jsonify({'offer': sig['offer'], 'id': sig['offer_id']})
-        elif action == "answer":
-            return jsonify(sig['answer'])
-        elif action == "admin_ice":
-            res = list(sig['admin_ice'])
-            sig['admin_ice'].clear()
-            return jsonify(res)
-        elif action == "cam_ice":
-            res = list(sig['cam_ice'])
-            sig['cam_ice'].clear()
-            return jsonify(res)
-    return jsonify(None)
-
-# ---------- Admin side ----------
-@app.route("/admin", methods=["GET", "POST"])
-def admin_login():
-    error = None
-    if request.method == "POST":
-        pw = request.form.get("password", "")
-        if pw == ADMIN_PASSWORD:
-            session["admin"] = True
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        if username == ADMIN_USERNAME and check_password_hash(ADMIN_PASSWORD_HASH, password):
+            session["is_admin"] = True
+            session["admin_id"] = hashlib.sha256(
+                (username + str(time.time())).encode()
+            ).hexdigest()[:16]
             return redirect(url_for("dashboard"))
-        error = "Wrong password"
-    return f"""
-    <html><head><title>Admin Login</title>
-    <style>body{{font-family:sans-serif;background:#111;color:#eee;
-    display:flex;align-items:center;justify-content:center;height:100vh}}
-    form{{background:#222;padding:30px;border-radius:12px;min-width:300px}}
-    input{{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:0;background:#333;color:#fff}}
-    button{{width:100%;padding:10px;background:#4af;color:#000;border:0;border-radius:6px;font-weight:bold;cursor:pointer}}
-    .err{{color:#f66}}</style></head>
-    <body><form method="post">
-    <h2>🔒 Admin Login</h2>
-    <input type="password" name="password" placeholder="Password" autofocus required>
-    <button>Login</button>
-    {"<p class='err'>"+error+"</p>" if error else ""}
-    </form></body></html>
-    """
+        return render_template("login.html", error="Invalid credentials"), 401
+    return render_template("login.html")
+
 
 @app.route("/logout")
 def logout():
     session.clear()
-    return redirect(url_for("admin_login"))
+    return redirect(url_for("login"))
+
 
 @app.route("/dashboard")
 @login_required
 def dashboard():
     return render_template("dashboard.html")
 
-@app.route("/api/cameras")
-@login_required
-def api_cameras():
-    return jsonify(get_live_cameras())
 
-# ---------- Footage ----------
+@app.route("/camera")
+def camera():
+    # The camera page generates its own ID client-side and registers via API.
+    return render_template("camera.html")
+
+
 @app.route("/footage")
 @login_required
-def footage_list():
-    files = []
-    if supabase:
-        try:
-            res = supabase.storage.from_("footages").list()
-            for f in res:
-                if f.get("name") == ".emptyFolderPlaceholder": 
-                    continue
-                meta = f.get("metadata", {})
-                size = meta.get("size", 0)
-                files.append({
-                    "name": f.get("name"),
-                    "size_mb": round(size / 1024 / 1024, 2),
-                    "modified": f.get("created_at", "Unknown")[:19].replace("T", " ")
+def footage():
+    return render_template("footage.html")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Camera Registration & Heartbeat API
+# ──────────────────────────────────────────────────────────────────
+@app.route("/api/cameras/register", methods=["POST"])
+def register_camera():
+    data = request.get_json(force=True, silent=True) or {}
+    camera_id = data.get("camera_id") or f"cam-{uuid.uuid4().hex[:8]}"
+    name = data.get("name", "Untitled Camera")
+    with _state_lock:
+        CAMERAS[camera_id] = {
+            "camera_id": camera_id,
+            "name": name,
+            "last_ping": time.time(),
+            "registered_at": time.time(),
+            "ip": request.remote_addr,
+            "user_agent": request.headers.get("User-Agent", "")[:120],
+        }
+        CAMERA_ICE.setdefault(camera_id, [])
+    return jsonify({"camera_id": camera_id, "status": "registered"})
+
+
+@app.route("/api/cameras/ping", methods=["POST"])
+def camera_ping():
+    data = request.get_json(force=True, silent=True) or {}
+    camera_id = data.get("camera_id")
+    if not camera_id:
+        return jsonify({"error": "missing camera_id"}), 400
+    with _state_lock:
+        if camera_id in CAMERAS:
+            CAMERAS[camera_id]["last_ping"] = time.time()
+            if "name" in data:
+                CAMERAS[camera_id]["name"] = data["name"]
+            return jsonify({"status": "ok"})
+        # auto re-register if missing
+        CAMERAS[camera_id] = {
+            "camera_id": camera_id,
+            "name": data.get("name", "Untitled Camera"),
+            "last_ping": time.time(),
+            "registered_at": time.time(),
+            "ip": request.remote_addr,
+            "user_agent": request.headers.get("User-Agent", "")[:120],
+        }
+        CAMERA_ICE.setdefault(camera_id, [])
+    return jsonify({"status": "re-registered"})
+
+
+@app.route("/api/cameras")
+@api_login_required
+def list_cameras():
+    now = time.time()
+    with _state_lock:
+        out = []
+        for cid, info in CAMERAS.items():
+            out.append({
+                "camera_id": cid,
+                "name": info.get("name"),
+                "online": (now - info.get("last_ping", 0)) < CAMERA_TTL,
+                "last_ping_ago": round(now - info.get("last_ping", 0), 1),
+            })
+    return jsonify(out)
+
+
+# ──────────────────────────────────────────────────────────────────
+# WebRTC Signaling
+# ──────────────────────────────────────────────────────────────────
+# Flow:
+#   1. Admin → POST /api/webrtc/offer {camera_id, sdp}  → creates session
+#   2. Camera → GET /api/webrtc/poll?camera_id=...   → grabs pending offer
+#   3. Camera → POST /api/webrtc/answer {session_id, sdp}
+#   4. Admin → GET /api/webrtc/answer?session_id=...
+#   5. Both exchange ICE candidates via /api/webrtc/ice
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/webrtc/offer", methods=["POST"])
+@api_login_required
+def webrtc_offer():
+    """Admin sends an SDP offer to a specific camera."""
+    data = request.get_json(force=True, silent=True) or {}
+    camera_id = data.get("camera_id")
+    sdp = data.get("sdp")
+    if not camera_id or not sdp:
+        return jsonify({"error": "missing camera_id or sdp"}), 400
+    with _state_lock:
+        if camera_id not in CAMERAS:
+            return jsonify({"error": "camera not found"}), 404
+        session_id = f"sess-{uuid.uuid4().hex[:12]}"
+        WEBRTC_SESSIONS[session_id] = {
+            "session_id": session_id,
+            "camera_id": camera_id,
+            "admin_id": session.get("admin_id"),
+            "offer": sdp,
+            "answer": None,
+            "created_at": time.time(),
+            "consumed_by_camera": False,
+        }
+        # Mark pending offer for camera to pick up
+        CAMERAS[camera_id]["pending_offer"] = {
+            "session_id": session_id,
+            "sdp": sdp,
+        }
+    return jsonify({"session_id": session_id})
+
+
+@app.route("/api/webrtc/poll", methods=["GET"])
+def webrtc_poll():
+    """Camera polls for pending WebRTC offers and incoming ICE candidates."""
+    camera_id = request.args.get("camera_id")
+    if not camera_id:
+        return jsonify({"error": "missing camera_id"}), 400
+    with _state_lock:
+        if camera_id not in CAMERAS:
+            return jsonify({"error": "camera not registered"}), 404
+        offer = CAMERAS[camera_id].pop("pending_offer", None)
+        ice_candidates = CAMERA_ICE.get(camera_id, [])
+        CAMERA_ICE[camera_id] = []
+    return jsonify({
+        "offer": offer,  # {session_id, sdp} or None
+        "ice_candidates": ice_candidates,
+    })
+
+
+@app.route("/api/webrtc/answer", methods=["POST", "GET"])
+def webrtc_answer():
+    """Camera POSTs its SDP answer; Admin GETs it via session_id."""
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        session_id = data.get("session_id")
+        sdp = data.get("sdp")
+        if not session_id or not sdp:
+            return jsonify({"error": "missing session_id or sdp"}), 400
+        with _state_lock:
+            if session_id not in WEBRTC_SESSIONS:
+                return jsonify({"error": "session not found"}), 404
+            WEBRTC_SESSIONS[session_id]["answer"] = sdp
+            WEBRTC_SESSIONS[session_id]["answered_at"] = time.time()
+        return jsonify({"status": "ok"})
+
+    # GET — admin retrieves the answer
+    session_id = request.args.get("session_id")
+    if not session_id:
+        return jsonify({"error": "missing session_id"}), 400
+    with _state_lock:
+        sess = WEBRTC_SESSIONS.get(session_id)
+        if not sess:
+            return jsonify({"error": "session not found"}), 404
+        answer = sess.get("answer")
+        # Collect ICE candidates queued for this admin session
+        admin_id = sess.get("admin_id")
+        ice = ADMIN_ICE.get(admin_id, [])
+        ADMIN_ICE[admin_id] = [c for c in ice if c.get("session_id") != session_id]
+        admin_ice_for_session = [c for c in ice if c.get("session_id") == session_id]
+    return jsonify({
+        "answer": answer,
+        "ice_candidates": admin_ice_for_session,
+    })
+
+
+@app.route("/api/webrtc/ice", methods=["POST", "GET"])
+def webrtc_ice():
+    """
+    POST: Either camera or admin pushes an ICE candidate.
+      Body: {session_id, candidate, from: 'camera'|'admin'}
+    GET:  Admin pulls ICE candidates for a session (also handled by answer GET).
+    """
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        session_id = data.get("session_id")
+        candidate = data.get("candidate")
+        src = data.get("from", "camera")
+        if not session_id or candidate is None:
+            return jsonify({"error": "missing session_id or candidate"}), 400
+        with _state_lock:
+            sess = WEBRTC_SESSIONS.get(session_id)
+            if not sess:
+                return jsonify({"error": "session not found"}), 404
+            if src == "camera":
+                # send to admin
+                admin_id = sess.get("admin_id")
+                ADMIN_ICE.setdefault(admin_id, []).append({
+                    "session_id": session_id,
+                    "candidate": candidate,
                 })
-            files.sort(key=lambda x: x["name"], reverse=True)
-        except Exception as e:
-            print(f"[Supabase List Error] {e}")
-    return render_template("footage.html", files=files)
+            else:
+                # send to camera
+                camera_id = sess.get("camera_id")
+                CAMERA_ICE.setdefault(camera_id, []).append(candidate)
+        return jsonify({"status": "ok"})
 
-@app.route("/footage/<path:filename>")
-@login_required
-def footage_file(filename):
-    if supabase:
+    # GET: pull ICE for camera by session_id
+    session_id = request.args.get("session_id")
+    camera_id = request.args.get("camera_id")
+    with _state_lock:
+        if session_id:
+            sess = WEBRTC_SESSIONS.get(session_id)
+            if not sess:
+                return jsonify({"error": "session not found"}), 404
+            cid = sess.get("camera_id")
+            ice = CAMERA_ICE.get(cid, [])
+            CAMERA_ICE[cid] = []
+            return jsonify({"ice_candidates": ice})
+        if camera_id:
+            ice = CAMERA_ICE.get(camera_id, [])
+            CAMERA_ICE[camera_id] = []
+            return jsonify({"ice_candidates": ice})
+    return jsonify({"error": "missing session_id or camera_id"}), 400
+
+
+# ──────────────────────────────────────────────────────────────────
+# Footage Upload (from camera)
+# ──────────────────────────────────────────────────────────────────
+@app.route("/api/footage/upload", methods=["POST"])
+def upload_footage():
+    if "video" not in request.files:
+        return jsonify({"error": "no video file"}), 400
+    file = request.files["video"]
+    camera_id = request.form.get("camera_id", "unknown")
+    camera_name = request.form.get("camera_name", "Untitled")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    safe_cam = "".join(c if c.isalnum() else "_" for c in camera_id)[:24]
+    object_path = f"{safe_cam}/{ts}_{uuid.uuid4().hex[:6]}.webm"
+
+    file_bytes = file.read()
+    if not file_bytes:
+        return jsonify({"error": "empty file"}), 400
+
+    if not supabase:
+        return jsonify({"error": "storage not configured"}), 500
+    try:
+        supabase.storage.from_(SUPABASE_BUCKET).upload(
+            path=object_path,
+            file=file_bytes,
+            file_options={
+                "content-type": "video/webm",
+                "upsert": "false",
+                "metadata": {
+                    "camera_id": camera_id,
+                    "camera_name": camera_name,
+                    "uploaded_at": ts,
+                }
+            },
+        )
+        # Insert metadata row for fast listing without scanning storage
         try:
-            # Generate a secure signed URL valid for 1 hour
-            res = supabase.storage.from_("footages").create_signed_url(filename, 3600)
-            return redirect(res.get("signedURL"))
-        except Exception as e:
-            print(f"[Supabase Signed URL Error] {e}")
-            abort(404)
-    abort(404)
+            supabase.table("footages").insert({
+                "object_path": object_path,
+                "camera_id": camera_id,
+                "camera_name": camera_name,
+                "size_bytes": len(file_bytes),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+        except Exception as db_err:
+            print(f"[db] metadata insert failed (non-fatal): {db_err}")
+        return jsonify({"status": "uploaded", "path": object_path})
+    except Exception as e:
+        print(f"[upload] error: {e}")
+        return jsonify({"error": str(e)}), 500
 
-@app.route("/api/delete_footages", methods=["POST"])
-@login_required
-def delete_footages():
-    data = request.get_json()
-    if not data or "files" not in data:
-        return jsonify(ok=False, error="No files provided"), 400
-    
-    files_to_delete = data["files"]
-    if supabase:
+
+# ──────────────────────────────────────────────────────────────────
+# Footage Listing & Streaming (signed URLs / backend proxy)
+# ──────────────────────────────────────────────────────────────────
+@app.route("/api/footage/list")
+@api_login_required
+def footage_list():
+    """Return list of footage metadata with signed URLs."""
+    try:
+        # Try metadata DB first
+        items = []
         try:
-            supabase.storage.from_("footages").remove(files_to_delete)
-            return jsonify(ok=True)
-        except Exception as e:
-            print(f"[Supabase Delete Error] {e}")
-            return jsonify(ok=False, error=str(e)), 500
-    
-    return jsonify(ok=False, error="Supabase not configured"), 500
+            res = supabase.table("footages") \
+                .select("object_path,camera_id,camera_name,size_bytes,created_at") \
+                .order("created_at", desc=True) \
+                .limit(200) \
+                .execute()
+            items = res.data or []
+        except Exception:
+            # Fallback: list objects in storage
+            res = supabase.storage.from_(SUPABASE_BUCKET).list()
+            for f in res:
+                if f.get("name", "").endswith(".webm"):
+                    items.append({
+                        "object_path": f["name"],
+                        "camera_id": "unknown",
+                        "camera_name": "Unknown",
+                        "size_bytes": f.get("metadata", {}).get("size", 0),
+                        "created_at": f.get("created_at"),
+                    })
+
+        # Generate signed URLs (10 minutes)
+        out = []
+        for it in items:
+            path = it["object_path"]
+            try:
+                url = supabase.storage.from_(SUPABASE_BUCKET).create_signed_url(
+                    path, expires_in=600
+                )["signedURL"]
+            except Exception as e:
+                print(f"[signed-url] failed for {path}: {e}")
+                url = None
+            out.append({
+                "object_path": path,
+                "camera_id": it.get("camera_id"),
+                "camera_name": it.get("camera_name", "Unknown"),
+                "size_bytes": it.get("size_bytes", 0),
+                "created_at": it.get("created_at"),
+                "signed_url": url,
+            })
+        return jsonify(out)
+    except Exception as e:
+        print(f"[footage-list] {e}")
+        return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/footage/delete", methods=["POST"])
+@api_login_required
+def footage_delete():
+    data = request.get_json(force=True, silent=True) or {}
+    path = data.get("object_path")
+    if not path:
+        return jsonify({"error": "missing object_path"}), 400
+    try:
+        supabase.storage.from_(SUPABASE_BUCKET).remove([path])
+        try:
+            supabase.table("footages").delete().eq("object_path", path).execute()
+        except Exception:
+            pass
+        return jsonify({"status": "deleted"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "cameras": len(CAMERAS)})
+
+
+# ──────────────────────────────────────────────────────────────────
+# Entry point
+# ──────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print(f"[CCTV] Connected to Supabase: {'Yes' if supabase else 'No'}")
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, threaded=True)
