@@ -1,135 +1,265 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-<meta charset="utf-8">
-<title>Footage</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Footage Library · CCTV</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <style>
-  body{margin:0;font-family:sans-serif;background:#0d0f14;color:#eee}
-  header{background:#1a1f2b;padding:14px 22px;display:flex;justify-content:space-between;align-items:center}
-  header h1{margin:0;font-size:18px}
-  header a{color:#4af;text-decoration:none;margin-left:16px}
-  main{padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:20px; padding-bottom: 80px;}
-  @media(max-width:900px){main{grid-template-columns:1fr}}
-  table{width:100%;border-collapse:collapse;background:#1a1f2b;border-radius:8px;overflow:hidden}
-  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #2a2f3b;font-size:14px}
-  tr:hover{background:#222836;cursor:pointer}
-  .chk-col {width: 40px; text-align: center;}
-  video{width:100%;background:#000;border-radius:8px}
-  .empty{opacity:.6;padding:20px;text-align:center}
-  
-  /* Sticky Action Bar for Bulk Delete */
-  #action-bar {position:fixed; bottom:0; left:0; right:0; background:#f55; padding:16px; display:none; justify-content:space-between; align-items:center; z-index:100;}
-  #action-bar span {font-weight:bold; font-size:18px; color:#fff;}
-  #action-bar button {padding:10px 20px; background:#fff; color:#f55; border:none; border-radius:6px; font-weight:bold; cursor:pointer;}
+  *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+  :root{--bg:#0f172a;--card:#1e293b;--border:#334155;--accent:#6366f1;--text:#e2e8f0;--muted:#94a3b8}
+  body{background:var(--bg);color:var(--text);min-height:100vh}
+  header{position:sticky;top:0;background:rgba(15,23,42,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:.9rem 1.2rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.6rem;z-index:50}
+  .logo{font-size:1.15rem;font-weight:700}
+  nav{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+  nav a,nav button{padding:.45rem .9rem;background:rgba(30,41,59,.6);border:1px solid var(--border);border-radius:8px;color:var(--text);text-decoration:none;font-size:.85rem;cursor:pointer}
+  nav a:hover,nav button:hover{border-color:var(--accent);background:rgba(99,102,241,.15)}
+  main{padding:1.2rem;max-width:1400px;margin:0 auto}
+  .toolbar{display:flex;gap:.6rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap}
+  .toolbar input,.toolbar select{background:rgba(15,23,42,.6);border:1px solid var(--border);color:var(--text);padding:.5rem .8rem;border-radius:8px;font-size:.85rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;cursor:pointer;transition:.2s}
+  .card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .thumb{aspect-ratio:16/9;background:#000;display:flex;align-items:center;justify-content:center;color:var(--muted);position:relative}
+  .thumb video{width:100%;height:100%;object-fit:cover}
+  .thumb .play{position:absolute;font-size:3rem;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.8);opacity:.85}
+  .badge{position:absolute;top:.5rem;left:.5rem;padding:.25rem .6rem;border-radius:6px;font-size:.7rem;font-weight:700;background:#6366f1;color:#fff}
+  .badge.scan{left:auto;right:.5rem;background:#f59e0b;color:#000;display:none}
+  .badge.scan.active{display:block}
+  .badge.scan.detected{background:#10b981;color:#000}
+  .meta{padding:.6rem .8rem;display:flex;justify-content:space-between;font-size:.8rem;gap:.5rem}
+  .meta .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .meta .time{color:var(--muted);flex-shrink:0}
+  .player-modal{position:fixed;inset:0;background:rgba(0,0,0,.95);display:none;z-index:100;flex-direction:column}
+  .player-modal.open{display:flex}
+  .player-bar{padding:.6rem 1rem;display:flex;justify-content:space-between;align-items:center;background:rgba(15,23,42,.8);color:#fff}
+  .player-bar button{background:rgba(239,68,68,.2);border:1px solid #ef4444;color:#fff;padding:.4rem .8rem;border-radius:6px;cursor:pointer}
+  .player-stage{flex:1;display:flex;align-items:center;justify-content:center;position:relative;padding:1rem}
+  .player-stage video{max-width:100%;max-height:100%;border-radius:8px}
+  .player-stage canvas{position:absolute;pointer-events:none;max-width:100%;max-height:100%}
+  .scan-btn{background:#f59e0b;color:#000;border:none;padding:.4rem .8rem;border-radius:6px;cursor:pointer;font-size:.8rem;font-weight:600}
+  .scan-btn:disabled{opacity:.5;cursor:wait}
+  .empty{text-align:center;padding:4rem 1rem;color:var(--muted)}
 </style>
 </head>
 <body>
+
 <header>
-  <h1>🎞 Supabase Footage</h1>
-  <div>
+  <div class="logo">🎬 Footage Library</div>
+  <nav>
     <a href="/dashboard">Live</a>
-    <a href="/footage">Footage</a>
+    <a href="/footage" style="background:rgba(99,102,241,.2);border-color:var(--accent)">Footage</a>
     <a href="/logout">Logout</a>
-  </div>
+  </nav>
 </header>
 
 <main>
-  <div>
-    {% if files %}
-    <table>
-      <thead>
-          <tr>
-              <th class="chk-col"><input type="checkbox" id="selectAll" onclick="toggleAll(this)"></th>
-              <th>File</th>
-              <th>Date / Time</th>
-              <th>Size</th>
-          </tr>
-      </thead>
-      <tbody>
-        {% for f in files %}
-        <tr onclick="play('{{ f.name }}')">
-          <td class="chk-col" onclick="event.stopPropagation();">
-              <input type="checkbox" class="file-chk" value="{{ f.name }}" onchange="updateActionBar()">
-          </td>
-          <td style="word-break: break-all;">{{ f.name }}</td>
-          <td>{{ f.modified }}</td>
-          <td>{{ f.size_mb }} MB</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-      <div class="empty">No footage yet. Supabase recordings appear here every 10 minutes.</div>
-    {% endif %}
+  <div class="toolbar">
+    <input type="text" id="search" placeholder="🔍 Search camera name…">
+    <select id="camFilter"><option value="">All cameras</option></select>
+    <button onclick="loadFootage()" style="background:rgba(99,102,241,.2);border:1px solid var(--accent);color:#fff;padding:.5rem .9rem;border-radius:8px;cursor:pointer">🔄 Refresh</button>
   </div>
-
-  <div>
-    <video id="player" controls autoplay></video>
-    <p id="now" style="opacity:.7">Click any row to stream from Supabase.</p>
-    <a id="dl" style="color:#4af; display: none;" target="_blank">⬇ Download</a>
-  </div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty">Loading footage…</div>
 </main>
 
-<div id="action-bar">
-    <span id="selected-count">0 files selected</span>
-    <button onclick="deleteSelected()">Delete Selected</button>
+<div class="player-modal" id="playerModal">
+  <div class="player-bar">
+    <div id="playerTitle">Footage</div>
+    <div style="display:flex;gap:.5rem">
+      <button class="scan-btn" id="scanBtn">🧍 Scan for People</button>
+      <button onclick="closePlayer()">✕ Close</button>
+    </div>
+  </div>
+  <div class="player-stage" id="playerStage">
+    <video id="player" controls playsinline></video>
+    <canvas id="playerCanvas"></canvas>
+  </div>
 </div>
 
 <script>
-function play(name) {
-  const p = document.getElementById("player");
-  const secureUrl = "/footage/" + encodeURIComponent(name);
-  p.src = secureUrl;
-  p.play();
-  document.getElementById("now").textContent = "Now streaming: " + name;
-  const dl = document.getElementById("dl");
-  dl.href = secureUrl;
-  dl.style.display = "inline-block";
-  dl.textContent = "⬇ Download " + name;
+let footage = [];
+let model = null;
+let isMobileMode = localStorage.getItem("cctvMode") === "mobile";
+
+async function ensureModel() {
+  if (model) return;
+  try {
+    model = await cocoSsd.load({base: "lite_mobilenet_v2"});
+  } catch (e) { console.warn("model load failed", e); }
 }
 
-// Bulk Delete Logic
-function toggleAll(source) {
-    const checkboxes = document.querySelectorAll('.file-chk');
-    checkboxes.forEach(chk => chk.checked = source.checked);
-    updateActionBar();
+async function loadFootage() {
+  try {
+    const res = await fetch("/api/footage/list");
+    if (!res.ok) { $("empty").textContent = "Error loading footage"; return; }
+    footage = await res.json();
+    renderGrid();
+    populateFilter();
+  } catch (e) {
+    $("empty").textContent = "Error: " + e.message;
+  }
 }
 
-function updateActionBar() {
-    const checkedBoxes = document.querySelectorAll('.file-chk:checked');
-    const actionBar = document.getElementById('action-bar');
-    const countText = document.getElementById('selected-count');
-    
-    if (checkedBoxes.length > 0) {
-        actionBar.style.display = 'flex';
-        countText.innerText = checkedBoxes.length + " files selected";
-    } else {
-        actionBar.style.display = 'none';
-        document.getElementById('selectAll').checked = false;
+function populateFilter() {
+  const select = $("camFilter");
+  const cams = [...new Set(footage.map(f => f.camera_name || "Unknown"))];
+  select.innerHTML = '<option value="">All cameras</option>' +
+    cams.map(c => `<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join("");
+}
+
+function escapeHtml(s){return (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));}
+function escapeAttr(s){return escapeHtml(s);}
+
+function formatTime(iso) {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString();
+  } catch { return iso; }
+}
+function formatSize(b) {
+  if (!b) return "—";
+  if (b < 1024) return b + " B";
+  if (b < 1024*1024) return (b/1024).toFixed(1) + " KB";
+  return (b/1024/1024).toFixed(2) + " MB";
+}
+
+function renderGrid() {
+  const grid = $("grid");
+  const search = $("search").value.toLowerCase();
+  const camFilter = $("camFilter").value;
+  grid.innerHTML = "";
+  const filtered = footage.filter(f =>
+    (!search || (f.camera_name||"").toLowerCase().includes(search)) &&
+    (!camFilter || f.camera_name === camFilter)
+  );
+
+  $("empty").style.display = filtered.length ? "none" : "block";
+  if (!filtered.length) $("empty").textContent = "No footage found";
+
+  filtered.forEach(f => {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <div class="thumb">
+        <span class="badge">${formatSize(f.size_bytes)}</span>
+        <span class="badge scan">🧍</span>
+        <div class="play">▶</div>
+      </div>
+      <div class="meta">
+        <span class="name">${escapeHtml(f.camera_name || "Unknown")}</span>
+        <span class="time">${formatTime(f.created_at)}</span>
+      </div>
+    `;
+    card.addEventListener("click", () => openPlayer(f));
+    grid.appendChild(card);
+  });
+}
+
+ $("search").addEventListener("input", renderGrid);
+ $("camFilter").addEventListener("change", renderGrid);
+
+// ─────────────────────────────────────────────────────────────────
+// Player + on-demand human detection scanning
+// ─────────────────────────────────────────────────────────────────
+let currentFootage = null;
+let scanLoopActive = false;
+
+async function openPlayer(f) {
+  currentFootage = f;
+  $("playerTitle").textContent = `${f.camera_name || "Unknown"} · ${formatTime(f.created_at)}`;
+  const video = $("player");
+  const canvas = $("playerCanvas");
+  canvas.width = 0; canvas.height = 0;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!f.signed_url) {
+    alert("Signed URL expired. Please refresh.");
+    return;
+  }
+  video.src = f.signed_url;
+  $("playerModal").classList.add("open");
+  video.play().catch(()=>{});
+  // Reset scan button
+  const btn = $("scanBtn");
+  btn.disabled = false;
+  btn.textContent = "🧍 Scan for People";
+  btn.onclick = () => toggleScan();
+}
+
+function closePlayer() {
+  $("playerModal").classList.remove("open");
+  const video = $("player");
+  video.pause();
+  video.src = "";
+  scanLoopActive = false;
+}
+
+async function toggleScan() {
+  const btn = $("scanBtn");
+  if (scanLoopActive) {
+    scanLoopActive = false;
+    btn.textContent = "🧍 Scan for People";
+    btn.disabled = false;
+    const canvas = $("playerCanvas");
+    canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height);
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Loading model…";
+  await ensureModel();
+  btn.disabled = false;
+  btn.textContent = "⏹ Stop Scan";
+  scanLoopActive = true;
+  runScan();
+}
+
+async function runScan() {
+  const video = $("player");
+  const canvas = $("playerCanvas");
+  const ctx = canvas.getContext("2d");
+  let peopleDetected = false;
+
+  const tick = async () => {
+    if (!scanLoopActive) return;
+    if (video.videoWidth && !video.paused && !video.ended) {
+      try {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        // Match canvas display size to video element
+        canvas.style.width = video.clientWidth + "px";
+        canvas.style.height = video.clientHeight + "px";
+        const preds = await model.detect(video, 20);
+        const people = preds.filter(p => p.class === "person");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = "#22d3ee";
+        ctx.font = "bold 24px Arial";
+        ctx.fillStyle = "#22d3ee";
+        people.forEach(p => {
+          const [x, y, w, h] = p.bbox;
+          ctx.strokeRect(x, y, w, h);
+          ctx.fillText(`person ${Math.round(p.score*100)}%`, x, Math.max(20, y - 6));
+        });
+        if (people.length > 0) peopleDetected = true;
+      } catch (e) { /* skip frame */ }
     }
+    requestAnimationFrame(tick);
+  };
+  tick();
 }
 
-async function deleteSelected() {
-    const checkedBoxes = document.querySelectorAll('.file-chk:checked');
-    if (checkedBoxes.length === 0) return;
-    
-    if (!confirm(`Are you sure you want to permanently delete ${checkedBoxes.length} files from Supabase?`)) return;
-    
-    const filesToDelete = Array.from(checkedBoxes).map(chk => chk.value);
-    
-    const r = await fetch("/api/delete_footages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: filesToDelete })
-    });
-    
-    const data = await r.json();
-    if (data.ok) {
-        window.location.reload(); // Reload to refresh list
-    } else {
-        alert("Error deleting files: " + data.error);
-    }
-}
+// ─────────────────────────────────────────────────────────────────
+// Boot
+// ─────────────────────────────────────────────────────────────────
+loadFootage();
+// Preload model in background on desktop
+if (!isMobileMode) ensureModel();
+
+document.addEventListener("keydown", e => { if (e.key === "Escape") closePlayer(); });
 </script>
 </body>
 </html>
