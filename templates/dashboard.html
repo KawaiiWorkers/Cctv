@@ -8,14 +8,7 @@
   body{margin:0;font-family:sans-serif;background:#0d0f14;color:#eee;overflow-x:hidden;}
   header{background:#1a1f2b;padding:14px 22px;display:flex;justify-content:space-between;align-items:center; z-index: 100; position:relative;}
   header h1{margin:0;font-size:18px}
-  .nav-links {display: flex; align-items: center; gap: 16px;}
-  header a{color:#4af;text-decoration:none}
-  
-  /* Mode Toggle Switch Styling */
-  .mode-switch {display: flex; background: #11151d; border-radius: 20px; padding: 3px; border: 1px solid #2a2f3b;}
-  .mode-btn {background: transparent; border: none; color: #888; padding: 4px 10px; font-size: 11px; font-weight: bold; border-radius: 16px; cursor: pointer; transition: all 0.2s;}
-  .mode-btn.active {background: #4af; color: #000;}
-
+  header a{color:#4af;text-decoration:none;margin-left:16px}
   main{padding:20px}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
   .cam{background:#1a1f2b;border-radius:10px;overflow:hidden;position:relative}
@@ -37,23 +30,16 @@
   
   #webrtc-container {position:relative; transform-origin:center; will-change:transform;}
   #webrtc-video {display:block; max-width:100%; max-height:100%; object-fit:contain; background:#000; pointer-events:none;}
-  #webrtc-canvas {position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; display:none;}
   
   .controls-bar {position:absolute; top:10px; right:10px; z-index:10000; display:flex; gap:10px;}
   .controls-bar button {padding:8px 16px; background:#4af; color:#000; border:none; border-radius:6px; font-weight:bold; cursor:pointer;}
   .controls-bar .close-btn {background:#f55; color:#fff;}
-  #ai-status {position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.7); padding:6px 12px; border-radius:6px; font-weight:bold; z-index:10000; font-size:13px; display:none;}
 </style>
 </head>
 <body>
 <header>
   <h1>📹 CCTV Admin Dashboard</h1>
-  <div class="nav-links">
-    <!-- Desktop vs Mobile AI Mode Toggle -->
-    <div class="mode-switch">
-      <button id="mobileModeBtn" class="mode-btn active" onclick="setAiMode('mobile')">📱 Mobile</button>
-      <button id="desktopModeBtn" class="mode-btn" onclick="setAiMode('desktop')">💻 Desktop AI</button>
-    </div>
+  <div>
     <a href="/dashboard">Live</a>
     <a href="/footage">Footage</a>
     <a href="/logout">Logout</a>
@@ -67,7 +53,6 @@
 
 <div id="webrtc-modal">
     <div id="modal-content">
-        <div id="ai-status">🤖 AI: Initializing...</div>
         <div class="controls-bar">
             <button onclick="resetZoom()">Reset Zoom</button>
             <button class="close-btn" onclick="closeFullscreen()">Close HD</button>
@@ -76,7 +61,6 @@
         <div id="zoom-container">
             <div id="webrtc-container">
                 <video id="webrtc-video" autoplay playsinline muted></video>
-                <canvas id="webrtc-canvas"></canvas>
             </div>
         </div>
     </div>
@@ -86,149 +70,60 @@
 let activePc = null;
 let icePoll = null;
 let ansPoll = null;
-let currentAiMode = localStorage.getItem('cctv_ai_mode') || 'mobile';
-
-// Initialize UI toggle state based on storage
-function updateModeUI() {
-    if (currentAiMode === 'desktop') {
-        document.getElementById('desktopModeBtn').className = 'mode-btn active';
-        document.getElementById('mobileModeBtn').className = 'mode-btn';
-    } else {
-        document.getElementById('mobileModeBtn').className = 'mode-btn active';
-        document.getElementById('desktopModeBtn').className = 'mode-btn';
-    }
-}
-updateModeUI();
-
-function setAiMode(mode) {
-    currentAiMode = mode;
-    localStorage.setItem('cctv_ai_mode', mode);
-    updateModeUI();
-    
-    const aiStatusEl = document.getElementById("ai-status");
-    const canvasEl = document.getElementById("webrtc-canvas");
-    
-    if (mode === 'desktop') {
-        aiStatusEl.style.display = "block";
-        canvasEl.style.display = "block";
-        initAiWorker();
-    } else {
-        aiStatusEl.style.display = "none";
-        canvasEl.style.display = "none";
-        if (detectionLoop) clearInterval(detectionLoop);
-    }
-}
-
-// --- ZERO-LAG AI WEB WORKER SETUP ---
-let aiWorker = null;
-let workerReady = false;
-let isDetecting = false;
-let detectionLoop = null;
-const hiddenCanvas = document.createElement("canvas");
-const hiddenCtx = hiddenCanvas.getContext("2d", { willReadFrequently: true });
-
-function initAiWorker() {
-    if (aiWorker) return;
-    const workerCode = `
-    importScripts("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs");
-    importScripts("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd");
-
-    let aiModel = null;
-    cocoSsd.load().then(model => {
-        aiModel = model;
-        postMessage({ type: 'ready' });
-    });
-
-    self.onmessage = async (e) => {
-        if (!aiModel || e.data.type !== 'detect') return;
-        const predictions = await aiModel.detect(e.data.image);
-        postMessage({ type: 'result', predictions: predictions });
-    };
-    `;
-
-    const workerBlob = new Blob([workerCode], {type: 'application/javascript'});
-    aiWorker = new Worker(URL.createObjectURL(workerBlob));
-
-    aiWorker.onmessage = (e) => {
-        if (e.data.type === 'ready') {
-            workerReady = true;
-            document.getElementById("ai-status").innerText = "🤖 AI: Background Ready";
-        } else if (e.data.type === 'result') {
-            drawPredictions(e.data.predictions);
-            isDetecting = false;
-        }
-    };
-}
-
-if (currentAiMode === 'desktop') {
-    document.getElementById("ai-status").style.display = "block";
-    document.getElementById("webrtc-canvas").style.display = "block";
-    initAiWorker();
-}
-
-function sendFrameToWorker() {
-    if (currentAiMode !== 'desktop') return;
-    const video = document.getElementById("webrtc-video");
-    if (!workerReady || isDetecting || video.readyState < 2 || document.getElementById("webrtc-modal").style.display !== "flex") return;
-    
-    isDetecting = true;
-    hiddenCanvas.width = video.videoWidth;
-    hiddenCanvas.height = video.videoHeight;
-    hiddenCtx.drawImage(video, 0, 0);
-    const imgData = hiddenCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height);
-    
-    aiWorker.postMessage({ type: 'detect', image: imgData });
-}
-
-function drawPredictions(predictions) {
-    const canvas = document.getElementById("webrtc-canvas");
-    const video = document.getElementById("webrtc-video");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    let humanCount = 0;
-    predictions.forEach(pred => {
-        if (pred.class === "person") {
-            humanCount++;
-            ctx.beginPath();
-            ctx.rect(...pred.bbox);
-            ctx.lineWidth = 4;
-            ctx.strokeStyle = "#ff0000";
-            ctx.fillStyle = "#ff0000";
-            ctx.stroke();
-            ctx.font = "18px Arial";
-            ctx.fillText(`Person (${Math.round(pred.score * 100)}%)`, pred.bbox[0], pred.bbox[1] > 20 ? pred.bbox[1] - 5 : 20);
-        }
-    });
-    document.getElementById("ai-status").innerText = `🤖 AI: Active | Humans: ${humanCount}`;
-}
 
 // --- Zoom & Pan State ---
 let scale = 1;
 let isDragging = false;
 let startX, startY, translateX = 0, translateY = 0;
 let initialDistance = null, initialScale = 1;
+
 const zoomContainer = document.getElementById('zoom-container');
 const vidContainer = document.getElementById('webrtc-container');
 
-zoomContainer.addEventListener('wheel', (e) => { e.preventDefault(); scale += e.deltaY * -0.002; scale = Math.min(Math.max(1, scale), 8); applyTransform(); }, {passive: false});
-zoomContainer.addEventListener('mousedown', e => { isDragging = true; startX = e.clientX - translateX; startY = e.clientY - translateY; });
+// Zoom Handlers
+zoomContainer.addEventListener('wheel', (e) => { 
+    e.preventDefault(); 
+    scale += e.deltaY * -0.002; 
+    scale = Math.min(Math.max(1, scale), 8); 
+    applyTransform(); 
+}, {passive: false});
+
+zoomContainer.addEventListener('mousedown', e => { 
+    isDragging = true; 
+    startX = e.clientX - translateX; 
+    startY = e.clientY - translateY; 
+});
 window.addEventListener('mouseup', () => isDragging = false);
-window.addEventListener('mousemove', e => { if(!isDragging) return; translateX = e.clientX - startX; translateY = e.clientY - startY; applyTransform(); });
+window.addEventListener('mousemove', e => { 
+    if(!isDragging) return; 
+    translateX = e.clientX - startX; 
+    translateY = e.clientY - startY; 
+    applyTransform(); 
+});
 
 zoomContainer.addEventListener('touchstart', e => {
-    if (e.touches.length === 2) { isDragging = false; initialDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); initialScale = scale; }
-    else if (e.touches.length === 1) { isDragging = true; startX = e.touches[0].clientX - translateX; startY = e.touches[0].clientY - translateY; }
+    if (e.touches.length === 2) { 
+        isDragging = false; 
+        initialDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); 
+        initialScale = scale; 
+    }
+    else if (e.touches.length === 1) { 
+        isDragging = true; 
+        startX = e.touches[0].clientX - translateX; 
+        startY = e.touches[0].clientY - translateY; 
+    }
 }, {passive: false});
+
 zoomContainer.addEventListener('touchmove', e => {
     e.preventDefault();
     if (e.touches.length === 2 && initialDistance) {
         const currentDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-        scale = Math.min(Math.max(1, initialScale * (currentDistance / initialDistance)), 8); applyTransform();
+        scale = Math.min(Math.max(1, initialScale * (currentDistance / initialDistance)), 8); 
+        applyTransform();
     } else if (e.touches.length === 1 && isDragging) {
-        translateX = e.touches[0].clientX - startX; translateY = e.touches[0].clientY - startY; applyTransform();
+        translateX = e.touches[0].clientX - startX; 
+        translateY = e.touches[0].clientY - startY; 
+        applyTransform();
     }
 }, {passive: false});
 zoomContainer.addEventListener('touchend', () => { isDragging = false; initialDistance = null; });
@@ -247,7 +142,6 @@ async function openFullscreen(camId) {
     if (activePc) activePc.close();
     if (icePoll) clearInterval(icePoll);
     if (ansPoll) clearInterval(ansPoll);
-    if (detectionLoop) clearInterval(detectionLoop);
 
     activePc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
     activePc.addTransceiver('video', { direction: 'recvonly' });
@@ -257,13 +151,14 @@ async function openFullscreen(camId) {
         if (vid.srcObject !== e.streams[0]) {
             vid.srcObject = e.streams[0];
             vid.play();
-            if (currentAiMode === 'desktop') {
-                detectionLoop = setInterval(sendFrameToWorker, 500); 
-            }
         }
     };
 
-    activePc.onicecandidate = e => { if (e.candidate) { fetch(`/webrtc/${camId}/admin_ice`, { method: 'POST', body: JSON.stringify(e.candidate) }); } };
+    activePc.onicecandidate = e => { 
+        if (e.candidate) { 
+            fetch(`/webrtc/${camId}/admin_ice`, { method: 'POST', body: JSON.stringify(e.candidate) }); 
+        } 
+    };
 
     const offer = await activePc.createOffer();
     await activePc.setLocalDescription(offer);
@@ -291,11 +186,8 @@ function closeFullscreen() {
     if (activePc) { activePc.close(); activePc = null; }
     if (icePoll) clearInterval(icePoll);
     if (ansPoll) clearInterval(ansPoll);
-    if (detectionLoop) clearInterval(detectionLoop);
     
     document.getElementById("webrtc-video").srcObject = null;
-    const canvas = document.getElementById("webrtc-canvas");
-    canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height);
 }
 
 // --- Dashboard Grid Updater ---
