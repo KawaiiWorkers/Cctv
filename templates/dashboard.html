@@ -2,11 +2,8 @@
 <html>
 <head>
 <meta charset="utf-8">
-<!-- This meta tag prevents the browser itself from zooming in on mobile -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Admin Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 <style>
   body{margin:0;font-family:sans-serif;background:#0d0f14;color:#eee;overflow-x:hidden;}
   header{background:#1a1f2b;padding:14px 22px;display:flex;justify-content:space-between;align-items:center; z-index: 100; position:relative;}
@@ -25,11 +22,9 @@
   .on{background:#093;color:#fff}.off{background:#933;color:#fff}
   .empty{opacity:.6;text-align:center;padding:60px}
   
-  /* Updated Modal Container - Small Block */
   #webrtc-modal {display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:9999; align-items:center; justify-content:center;}
   #modal-content {position:relative; width:95vw; max-width:800px; height:70vh; background:#000; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; box-shadow: 0px 10px 30px rgba(0,0,0,0.8);}
   
-  /* touch-action: none stops default browser scrolling/zooming */
   #zoom-container {flex:1; width:100%; height:100%; display:flex; align-items:center; justify-content:center; cursor:grab; overflow:hidden; touch-action:none;}
   #zoom-container:active {cursor:grabbing;}
   
@@ -58,10 +53,9 @@
   <div id="empty" class="empty">Waiting for cameras… open <code>/camera</code> on a phone.</div>
 </main>
 
-<!-- We wrap the UI in a smaller, centered modal-content block -->
 <div id="webrtc-modal">
     <div id="modal-content">
-        <div id="ai-status">🤖 AI: Loading Model...</div>
+        <div id="ai-status">🤖 AI: Initializing Worker...</div>
         <div class="controls-bar">
             <button onclick="resetZoom()">Reset Zoom</button>
             <button class="close-btn" onclick="closeFullscreen()">Close HD</button>
@@ -81,109 +75,64 @@ let activePc = null;
 let icePoll = null;
 let ansPoll = null;
 
-// --- AI & Detection State ---
-let aiModel = null;
-let aiTimeout = null;
+// --- ZERO-LAG AI WEB WORKER SETUP ---
+const workerCode = `
+importScripts("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs");
+importScripts("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd");
 
+let aiModel = null;
 cocoSsd.load().then(model => {
     aiModel = model;
-    document.getElementById("ai-status").innerText = "🤖 AI: Ready";
+    postMessage({ type: 'ready' });
 });
 
-// --- Zoom & Pan State (Desktop & Mobile) ---
-let scale = 1;
-let isDragging = false;
-let startX, startY, translateX = 0, translateY = 0;
-let initialDistance = null;
-let initialScale = 1;
+self.onmessage = async (e) => {
+    if (!aiModel || e.data.type !== 'detect') return;
+    const predictions = await aiModel.detect(e.data.image);
+    postMessage({ type: 'result', predictions: predictions });
+};
+`;
 
-const zoomContainer = document.getElementById('zoom-container');
-const vidContainer = document.getElementById('webrtc-container');
+const workerBlob = new Blob([workerCode], {type: 'application/javascript'});
+const aiWorker = new Worker(URL.createObjectURL(workerBlob));
+let workerReady = false;
+let isDetecting = false;
+let detectionLoop = null;
 
-// Desktop Mouse Wheel Zoom
-zoomContainer.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    scale += e.deltaY * -0.002;
-    scale = Math.min(Math.max(1, scale), 8); 
-    applyTransform();
-}, {passive: false});
+// Hidden canvas to extract video frames for the Worker
+const hiddenCanvas = document.createElement("canvas");
+const hiddenCtx = hiddenCanvas.getContext("2d", { willReadFrequently: true });
 
-// Desktop Mouse Pan
-zoomContainer.addEventListener('mousedown', e => {
-    isDragging = true;
-    startX = e.clientX - translateX;
-    startY = e.clientY - translateY;
-});
-window.addEventListener('mouseup', () => isDragging = false);
-window.addEventListener('mousemove', e => {
-    if(!isDragging) return;
-    translateX = e.clientX - startX;
-    translateY = e.clientY - startY;
-    applyTransform();
-});
-
-// Mobile Pinch-to-Zoom and Touch Pan
-zoomContainer.addEventListener('touchstart', e => {
-    if (e.touches.length === 2) {
-        isDragging = false;
-        initialDistance = Math.hypot(
-            e.touches[0].clientX - e.touches[1].clientX,
-            e.touches[0].clientY - e.touches[1].clientY
-        );
-        initialScale = scale;
-    } else if (e.touches.length === 1) {
-        isDragging = true;
-        startX = e.touches[0].clientX - translateX;
-        startY = e.touches[0].clientY - translateY;
+aiWorker.onmessage = (e) => {
+    if (e.data.type === 'ready') {
+        workerReady = true;
+        document.getElementById("ai-status").innerText = "🤖 AI: Background Worker Ready";
+    } else if (e.data.type === 'result') {
+        drawPredictions(e.data.predictions);
+        isDetecting = false; // Free the lock for the next frame
     }
-}, {passive: false});
+};
 
-zoomContainer.addEventListener('touchmove', e => {
-    e.preventDefault(); // Prevents the whole website from zooming/scrolling
-    if (e.touches.length === 2 && initialDistance) {
-        const currentDistance = Math.hypot(
-            e.touches[0].clientX - e.touches[1].clientX,
-            e.touches[0].clientY - e.touches[1].clientY
-        );
-        scale = Math.min(Math.max(1, initialScale * (currentDistance / initialDistance)), 8);
-        applyTransform();
-    } else if (e.touches.length === 1 && isDragging) {
-        translateX = e.touches[0].clientX - startX;
-        translateY = e.touches[0].clientY - startY;
-        applyTransform();
-    }
-}, {passive: false});
-
-zoomContainer.addEventListener('touchend', e => {
-    isDragging = false;
-    initialDistance = null;
-});
-
-function applyTransform() {
-    vidContainer.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-}
-
-function resetZoom() {
-    scale = 1; translateX = 0; translateY = 0;
-    applyTransform();
-}
-
-// --- Throttled AI Detection Loop (Fixes Lag) ---
-async function runHumanDetection() {
+function sendFrameToWorker() {
     const video = document.getElementById("webrtc-video");
-    const canvas = document.getElementById("webrtc-canvas");
+    if (!workerReady || isDetecting || video.readyState < 2 || document.getElementById("webrtc-modal").style.display !== "flex") return;
     
-    if (video.readyState < 2 || !aiModel) {
-        aiTimeout = setTimeout(runHumanDetection, 500); // Retry in 500ms
-        return;
-    }
+    isDetecting = true;
+    hiddenCanvas.width = video.videoWidth;
+    hiddenCanvas.height = video.videoHeight;
+    hiddenCtx.drawImage(video, 0, 0);
+    const imgData = hiddenCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height);
+    
+    // Send image to background thread (UI never freezes)
+    aiWorker.postMessage({ type: 'detect', image: imgData });
+}
 
+function drawPredictions(predictions) {
+    const canvas = document.getElementById("webrtc-canvas");
+    const video = document.getElementById("webrtc-video");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
-
-    const predictions = await aiModel.detect(video);
-    
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     let humanCount = 0;
@@ -196,31 +145,57 @@ async function runHumanDetection() {
             ctx.strokeStyle = "#ff0000";
             ctx.fillStyle = "#ff0000";
             ctx.stroke();
-            
             ctx.font = "18px Arial";
             ctx.fillText(`Person (${Math.round(pred.score * 100)}%)`, pred.bbox[0], pred.bbox[1] > 20 ? pred.bbox[1] - 5 : 20);
         }
     });
-
     document.getElementById("ai-status").innerText = `🤖 AI: Active | Humans: ${humanCount}`;
-    
-    // Throttle inference to 2 times a second instead of 60 frames per second
-    aiTimeout = setTimeout(runHumanDetection, 500); 
 }
 
+// --- Zoom & Pan State ---
+let scale = 1;
+let isDragging = false;
+let startX, startY, translateX = 0, translateY = 0;
+let initialDistance = null, initialScale = 1;
+const zoomContainer = document.getElementById('zoom-container');
+const vidContainer = document.getElementById('webrtc-container');
+
+// Zoom Handlers
+zoomContainer.addEventListener('wheel', (e) => { e.preventDefault(); scale += e.deltaY * -0.002; scale = Math.min(Math.max(1, scale), 8); applyTransform(); }, {passive: false});
+zoomContainer.addEventListener('mousedown', e => { isDragging = true; startX = e.clientX - translateX; startY = e.clientY - translateY; });
+window.addEventListener('mouseup', () => isDragging = false);
+window.addEventListener('mousemove', e => { if(!isDragging) return; translateX = e.clientX - startX; translateY = e.clientY - startY; applyTransform(); });
+
+zoomContainer.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) { isDragging = false; initialDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); initialScale = scale; }
+    else if (e.touches.length === 1) { isDragging = true; startX = e.touches[0].clientX - translateX; startY = e.touches[0].clientY - translateY; }
+}, {passive: false});
+zoomContainer.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (e.touches.length === 2 && initialDistance) {
+        const currentDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        scale = Math.min(Math.max(1, initialScale * (currentDistance / initialDistance)), 8); applyTransform();
+    } else if (e.touches.length === 1 && isDragging) {
+        translateX = e.touches[0].clientX - startX; translateY = e.touches[0].clientY - startY; applyTransform();
+    }
+}, {passive: false});
+zoomContainer.addEventListener('touchend', () => { isDragging = false; initialDistance = null; });
+
+function applyTransform() { vidContainer.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`; }
+function resetZoom() { scale = 1; translateX = 0; translateY = 0; applyTransform(); }
 
 // --- WebRTC Logic ---
 async function openFullscreen(camId) {
     const modal = document.getElementById("webrtc-modal");
     const vid = document.getElementById("webrtc-video");
-    modal.style.display = "flex"; // Changed from block to flex for centering
+    modal.style.display = "flex";
     vid.srcObject = null;
     resetZoom();
 
     if (activePc) activePc.close();
     if (icePoll) clearInterval(icePoll);
     if (ansPoll) clearInterval(ansPoll);
-    if (aiTimeout) clearTimeout(aiTimeout);
+    if (detectionLoop) clearInterval(detectionLoop);
 
     activePc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
     activePc.addTransceiver('video', { direction: 'recvonly' });
@@ -230,15 +205,12 @@ async function openFullscreen(camId) {
         if (vid.srcObject !== e.streams[0]) {
             vid.srcObject = e.streams[0];
             vid.play();
-            runHumanDetection();
+            // Send frame to worker twice a second
+            detectionLoop = setInterval(sendFrameToWorker, 500); 
         }
     };
 
-    activePc.onicecandidate = e => {
-        if (e.candidate) {
-            fetch(`/webrtc/${camId}/admin_ice`, { method: 'POST', body: JSON.stringify(e.candidate) });
-        }
-    };
+    activePc.onicecandidate = e => { if (e.candidate) { fetch(`/webrtc/${camId}/admin_ice`, { method: 'POST', body: JSON.stringify(e.candidate) }); } };
 
     const offer = await activePc.createOffer();
     await activePc.setLocalDescription(offer);
@@ -264,14 +236,12 @@ async function openFullscreen(camId) {
 function closeFullscreen() {
     document.getElementById("webrtc-modal").style.display = "none";
     if (activePc) { activePc.close(); activePc = null; }
-    if (icePoll) { clearInterval(icePoll); icePoll = null; }
-    if (ansPoll) { clearInterval(ansPoll); ansPoll = null; }
-    if (aiTimeout) { clearTimeout(aiTimeout); aiTimeout = null; }
+    if (icePoll) clearInterval(icePoll);
+    if (ansPoll) clearInterval(ansPoll);
+    if (detectionLoop) clearInterval(detectionLoop);
     
     document.getElementById("webrtc-video").srcObject = null;
-    const canvas = document.getElementById("webrtc-canvas");
-    canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height);
-    document.getElementById("ai-status").innerText = "🤖 AI: Ready";
+    document.getElementById("webrtc-canvas").getContext("2d").clearRect(0,0,document.getElementById("webrtc-canvas").width,document.getElementById("webrtc-canvas").height);
 }
 
 // --- Dashboard Grid Updater ---
@@ -296,10 +266,7 @@ async function tick() {
             <img alt="preview" />
             <div class="cam-overlay">▶ Go Live HD</div>
         </div>
-        <div class="meta">
-          <span><b>${c.name}</b><br><small>${c.id}</small></span>
-          <span class="badge"></span>
-        </div>
+        <div class="meta"><span><b>${c.name}</b><br><small>${c.id}</small></span><span class="badge"></span></div>
         <div class="meta"><small>last seen: <span class="ls"></span></small></div>`;
       grid.appendChild(el);
     }
