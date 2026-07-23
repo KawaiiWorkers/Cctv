@@ -268,6 +268,25 @@ def footage_file(filename):
             abort(404)
     abort(404)
 
+@app.route("/api/delete_footages", methods=["POST"])
+@login_required
+def delete_footages():
+    data = request.get_json()
+    if not data or "files" not in data:
+        return jsonify(ok=False, error="No files provided"), 400
+    
+    files_to_delete = data["files"]
+    if supabase:
+        try:
+            supabase.storage.from_("footages").remove(files_to_delete)
+            return jsonify(ok=True)
+        except Exception as e:
+            print(f"[Supabase Delete Error] {e}")
+            return jsonify(ok=False, error=str(e)), 500
+    
+    return jsonify(ok=False, error="Supabase not configured"), 500
+
+
 if __name__ == "__main__":
     print(f"[CCTV] Connected to Supabase: {'Yes' if supabase else 'No'}")
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
