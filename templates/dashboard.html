@@ -3,9 +3,12 @@
 <head>
 <meta charset="utf-8">
 <title>Admin Dashboard</title>
+<!-- Load TensorFlow.js and COCO-SSD Model -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 <style>
   body{margin:0;font-family:sans-serif;background:#0d0f14;color:#eee;overflow-x:hidden;}
-  header{background:#1a1f2b;padding:14px 22px;display:flex;justify-content:space-between;align-items:center}
+  header{background:#1a1f2b;padding:14px 22px;display:flex;justify-content:space-between;align-items:center; z-index: 100; position:relative;}
   header h1{margin:0;font-size:18px}
   header a{color:#4af;text-decoration:none;margin-left:16px}
   main{padding:20px}
@@ -21,10 +24,20 @@
   .on{background:#093;color:#fff}.off{background:#933;color:#fff}
   .empty{opacity:.6;text-align:center;padding:60px}
   
-  /* WebRTC Fullscreen Modal */
-  #webrtc-modal {display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:#000; z-index:9999;}
-  #webrtc-video {width:100%; height:100%; object-fit:contain; background:#000;}
-  .close-btn {position:absolute; top:20px; right:20px; z-index:10000; padding:12px 24px; background:#f55; color:#fff; border:none; border-radius:8px; font-weight:bold; cursor:pointer;}
+  /* WebRTC Fullscreen Modal & Zoom Container */
+  #webrtc-modal {display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:#000; z-index:9999; overflow:hidden;}
+  #zoom-container {width:100%; height:100%; display:flex; align-items:center; justify-content:center; cursor:grab;}
+  #zoom-container:active {cursor:grabbing;}
+  
+  /* Container holds both Video and the AI Canvas perfectly aligned */
+  #webrtc-container {position:relative; transform-origin:center; will-change:transform;}
+  #webrtc-video {display:block; max-width:100vw; max-height:100vh; object-fit:contain; background:#000; pointer-events:none;}
+  #webrtc-canvas {position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;}
+  
+  .controls-bar {position:absolute; top:20px; right:20px; z-index:10000; display:flex; gap:10px;}
+  .controls-bar button {padding:12px 20px; background:#4af; color:#000; border:none; border-radius:8px; font-weight:bold; cursor:pointer;}
+  .controls-bar .close-btn {background:#f55; color:#fff;}
+  #ai-status {position:absolute; top:20px; left:20px; background:rgba(0,0,0,0.6); padding:8px 12px; border-radius:6px; font-weight:bold; z-index:10000;}
 </style>
 </head>
 <body>
@@ -43,8 +56,18 @@
 </main>
 
 <div id="webrtc-modal">
-    <button class="close-btn" onclick="closeFullscreen()">Close HD Stream</button>
-    <video id="webrtc-video" autoplay playsinline controls></video>
+    <div id="ai-status">🤖 AI: Loading Model...</div>
+    <div class="controls-bar">
+        <button onclick="resetZoom()">Reset Zoom</button>
+        <button class="close-btn" onclick="closeFullscreen()">Close HD Stream</button>
+    </div>
+    
+    <div id="zoom-container">
+        <div id="webrtc-container">
+            <video id="webrtc-video" autoplay playsinline muted></video>
+            <canvas id="webrtc-canvas"></canvas>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -52,15 +75,109 @@ let activePc = null;
 let icePoll = null;
 let ansPoll = null;
 
+// --- AI & Detection State ---
+let aiModel = null;
+let detectInterval = null;
+
+// Load the AI model immediately in the background
+cocoSsd.load().then(model => {
+    aiModel = model;
+    console.log("AI Model Loaded");
+    document.getElementById("ai-status").innerText = "🤖 AI: Ready";
+});
+
+// --- Zoom & Pan State ---
+let scale = 1;
+let isDragging = false;
+let startX, startY, translateX = 0, translateY = 0;
+const zoomContainer = document.getElementById('zoom-container');
+const vidContainer = document.getElementById('webrtc-container');
+
+// Zoom logic
+zoomContainer.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    scale += e.deltaY * -0.002;
+    scale = Math.min(Math.max(1, scale), 8); // Allow zooming from 1x up to 8x
+    applyTransform();
+});
+
+// Pan logic (Dragging)
+zoomContainer.addEventListener('mousedown', e => {
+    isDragging = true;
+    startX = e.clientX - translateX;
+    startY = e.clientY - translateY;
+});
+window.addEventListener('mouseup', () => isDragging = false);
+window.addEventListener('mousemove', e => {
+    if(!isDragging) return;
+    translateX = e.clientX - startX;
+    translateY = e.clientY - startY;
+    applyTransform();
+});
+
+function applyTransform() {
+    vidContainer.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+}
+
+function resetZoom() {
+    scale = 1; translateX = 0; translateY = 0;
+    applyTransform();
+}
+
+// --- AI Detection Loop ---
+async function runHumanDetection() {
+    const video = document.getElementById("webrtc-video");
+    const canvas = document.getElementById("webrtc-canvas");
+    
+    if (video.readyState < 2 || !aiModel) {
+        detectInterval = requestAnimationFrame(runHumanDetection);
+        return;
+    }
+
+    // Match canvas size to actual video resolution
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+
+    // Run inference
+    const predictions = await aiModel.detect(video);
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    let humanCount = 0;
+    predictions.forEach(pred => {
+        // Only draw boxes if it detects a person
+        if (pred.class === "person") {
+            humanCount++;
+            ctx.beginPath();
+            ctx.rect(...pred.bbox);
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = "#ff0000";
+            ctx.fillStyle = "#ff0000";
+            ctx.stroke();
+            
+            // Draw Label
+            ctx.font = "18px Arial";
+            ctx.fillText(
+                `Person (${Math.round(pred.score * 100)}%)`,
+                pred.bbox[0], 
+                pred.bbox[1] > 20 ? pred.bbox[1] - 5 : 20
+            );
+        }
+    });
+
+    document.getElementById("ai-status").innerText = `🤖 AI: Active | Humans: ${humanCount}`;
+    detectInterval = requestAnimationFrame(runHumanDetection);
+}
+
+
+// --- WebRTC Logic ---
 async function openFullscreen(camId) {
     const modal = document.getElementById("webrtc-modal");
     const vid = document.getElementById("webrtc-video");
     modal.style.display = "block";
     vid.srcObject = null;
-
-    if (modal.requestFullscreen) {
-        try { await modal.requestFullscreen(); } catch(e){}
-    }
+    resetZoom();
 
     if (activePc) activePc.close();
     if (icePoll) clearInterval(icePoll);
@@ -74,6 +191,9 @@ async function openFullscreen(camId) {
         if (vid.srcObject !== e.streams[0]) {
             vid.srcObject = e.streams[0];
             vid.play();
+            // Start AI when stream connects
+            if(detectInterval) cancelAnimationFrame(detectInterval);
+            runHumanDetection();
         }
     };
 
@@ -85,7 +205,6 @@ async function openFullscreen(camId) {
 
     const offer = await activePc.createOffer();
     await activePc.setLocalDescription(offer);
-
     await fetch(`/webrtc/${camId}/offer`, { method: 'POST', body: JSON.stringify(activePc.localDescription) });
 
     ansPoll = setInterval(async () => {
@@ -106,14 +225,19 @@ async function openFullscreen(camId) {
 }
 
 function closeFullscreen() {
-    if (document.fullscreenElement) document.exitFullscreen();
     document.getElementById("webrtc-modal").style.display = "none";
     if (activePc) { activePc.close(); activePc = null; }
     if (icePoll) { clearInterval(icePoll); icePoll = null; }
     if (ansPoll) { clearInterval(ansPoll); ansPoll = null; }
+    if (detectInterval) { cancelAnimationFrame(detectInterval); detectInterval = null; }
+    
     document.getElementById("webrtc-video").srcObject = null;
+    const canvas = document.getElementById("webrtc-canvas");
+    canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height);
+    document.getElementById("ai-status").innerText = "🤖 AI: Ready";
 }
 
+// --- Dashboard Grid Updater ---
 async function tick() {
   const r = await fetch("/api/cameras");
   const cams = await r.json();
@@ -146,7 +270,6 @@ async function tick() {
     el.querySelector(".badge").className = "badge " + (c.online ? "on":"off");
     el.querySelector(".ls").textContent = c.last_seen;
     
-    // Only refresh thumbnail if not currently viewing full screen
     if(document.getElementById("webrtc-modal").style.display !== "block"){
         el.querySelector("img").src = "/preview/" + c.id + "?t=" + Date.now();
     }
