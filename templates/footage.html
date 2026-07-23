@@ -8,13 +8,19 @@
   header{background:#1a1f2b;padding:14px 22px;display:flex;justify-content:space-between;align-items:center}
   header h1{margin:0;font-size:18px}
   header a{color:#4af;text-decoration:none;margin-left:16px}
-  main{padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  main{padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:20px; padding-bottom: 80px;}
   @media(max-width:900px){main{grid-template-columns:1fr}}
   table{width:100%;border-collapse:collapse;background:#1a1f2b;border-radius:8px;overflow:hidden}
   th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #2a2f3b;font-size:14px}
   tr:hover{background:#222836;cursor:pointer}
+  .chk-col {width: 40px; text-align: center;}
   video{width:100%;background:#000;border-radius:8px}
   .empty{opacity:.6;padding:20px;text-align:center}
+  
+  /* Sticky Action Bar for Bulk Delete */
+  #action-bar {position:fixed; bottom:0; left:0; right:0; background:#f55; padding:16px; display:none; justify-content:space-between; align-items:center; z-index:100;}
+  #action-bar span {font-weight:bold; font-size:18px; color:#fff;}
+  #action-bar button {padding:10px 20px; background:#fff; color:#f55; border:none; border-radius:6px; font-weight:bold; cursor:pointer;}
 </style>
 </head>
 <body>
@@ -31,10 +37,20 @@
   <div>
     {% if files %}
     <table>
-      <thead><tr><th>File</th><th>Date / Time</th><th>Size</th></tr></thead>
+      <thead>
+          <tr>
+              <th class="chk-col"><input type="checkbox" id="selectAll" onclick="toggleAll(this)"></th>
+              <th>File</th>
+              <th>Date / Time</th>
+              <th>Size</th>
+          </tr>
+      </thead>
       <tbody>
         {% for f in files %}
         <tr onclick="play('{{ f.name }}')">
+          <td class="chk-col" onclick="event.stopPropagation();">
+              <input type="checkbox" class="file-chk" value="{{ f.name }}" onchange="updateActionBar()">
+          </td>
           <td style="word-break: break-all;">{{ f.name }}</td>
           <td>{{ f.modified }}</td>
           <td>{{ f.size_mb }} MB</td>
@@ -54,6 +70,11 @@
   </div>
 </main>
 
+<div id="action-bar">
+    <span id="selected-count">0 files selected</span>
+    <button onclick="deleteSelected()">Delete Selected</button>
+</div>
+
 <script>
 function play(name) {
   const p = document.getElementById("player");
@@ -65,6 +86,49 @@ function play(name) {
   dl.href = secureUrl;
   dl.style.display = "inline-block";
   dl.textContent = "⬇ Download " + name;
+}
+
+// Bulk Delete Logic
+function toggleAll(source) {
+    const checkboxes = document.querySelectorAll('.file-chk');
+    checkboxes.forEach(chk => chk.checked = source.checked);
+    updateActionBar();
+}
+
+function updateActionBar() {
+    const checkedBoxes = document.querySelectorAll('.file-chk:checked');
+    const actionBar = document.getElementById('action-bar');
+    const countText = document.getElementById('selected-count');
+    
+    if (checkedBoxes.length > 0) {
+        actionBar.style.display = 'flex';
+        countText.innerText = checkedBoxes.length + " files selected";
+    } else {
+        actionBar.style.display = 'none';
+        document.getElementById('selectAll').checked = false;
+    }
+}
+
+async function deleteSelected() {
+    const checkedBoxes = document.querySelectorAll('.file-chk:checked');
+    if (checkedBoxes.length === 0) return;
+    
+    if (!confirm(`Are you sure you want to permanently delete ${checkedBoxes.length} files from Supabase?`)) return;
+    
+    const filesToDelete = Array.from(checkedBoxes).map(chk => chk.value);
+    
+    const r = await fetch("/api/delete_footages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: filesToDelete })
+    });
+    
+    const data = await r.json();
+    if (data.ok) {
+        window.location.reload(); // Reload to refresh list
+    } else {
+        alert("Error deleting files: " + data.error);
+    }
 }
 </script>
 </body>
