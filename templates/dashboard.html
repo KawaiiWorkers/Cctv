@@ -41,6 +41,24 @@
     .empty .icon{font-size:48px;margin-bottom:10px}
     .placeholder{display:flex;align-items:center;justify-content:center;height:100%;
                  color:#445;font-size:14px;flex-direction:column;gap:8px;text-align:center;padding:10px}
+    
+    /* Overlay Modal */
+    .live-modal{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;
+                align-items:center;justify-content:center;z-index:1000;padding:20px;flex-direction:column}
+    .live-modal.active{display:flex}
+    .live-modal-content{width:100%;max-width:900px;background:#131b2e;border:1px solid #22304d;
+                        border-radius:12px;overflow:hidden}
+    .live-modal-header{padding:12px 16px;display:flex;justify-content:space-between;align-items:center;
+                       border-bottom:1px solid #22304d}
+    .live-modal-header h3{font-size:16px}
+    .live-modal-header button{background:transparent;border:0;color:#ff7676;font-size:24px;cursor:pointer}
+    .live-modal-body{position:relative;aspect-ratio:16/9;background:#000;display:flex;
+                     align-items:center;justify-content:center}
+    .live-modal-body video{width:100%;height:100%;object-fit:contain}
+    .live-modal-body .overlay-placeholder{color:#445;font-size:14px;text-align:center}
+    .spinner{border:4px solid rgba(255,255,255,.1);border-top:4px solid #4c8dff;
+             border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin-bottom:10px}
+    @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
   </style>
 </head>
 <body>
@@ -67,10 +85,28 @@
   </div>
 </div>
 
+<!-- Live View Overlay Modal -->
+<div class="live-modal" id="liveModal">
+  <div class="live-modal-content">
+    <div class="live-modal-header">
+      <h3 id="modalTitle">Live View</h3>
+      <button onclick="closeLivePlayer()">✕</button>
+    </div>
+    <div class="live-modal-body">
+      <video id="modalVideo" autoplay muted playsinline></video>
+      <div class="overlay-placeholder" id="modalPlaceholder">
+        <div class="spinner"></div>
+        <div>Connecting to camera...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 let cameras = [];
 let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
 let activeConnections = new Map();
+let currentModalCamId = null;
 
 const $ = id => document.getElementById(id);
 
@@ -148,24 +184,28 @@ function timeAgo(ts) {
 }
 
 async function connectCamera(camId) {
-  disconnectCamera(camId);
+  const cam = cameras.find(c => c.id === camId);
+  if (!cam) return;
 
-  const videoEl = document.getElementById(`video-${camId}`);
-  const placeholder = document.getElementById(`placeholder-${camId}`);
-  
-  placeholder.innerHTML = '<span>⏳</span><span>Connecting...</span>';
-  placeholder.style.display = 'flex';
+  currentModalCamId = camId;
+  $('modalTitle').textContent = `Live View: ${cam.name}`;
+  $('modalVideo').srcObject = null;
+  $('modalPlaceholder').innerHTML = '<div class="spinner"></div><div>Connecting to camera...</div>';
+  $('modalPlaceholder').style.display = 'block';
+  $('liveModal').classList.add('active');
+
+  disconnectCamera(camId);
 
   try {
     const pc = new RTCPeerConnection({ iceServers });
 
     pc.ontrack = (event) => {
       const stream = event.streams[0] || new MediaStream([event.track]);
-      videoEl.srcObject = stream;
-      placeholder.style.display = 'none';
+      $('modalVideo').srcObject = stream;
+      $('modalPlaceholder').style.display = 'none';
     };
 
-    // FIX: Only request video, camera doesn't provide audio
+    // Only request video, camera doesn't provide audio
     pc.addTransceiver('video', { direction: 'recvonly' });
 
     const offer = await pc.createOffer();
@@ -193,10 +233,12 @@ async function connectCamera(camId) {
 
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'connected') {
-        placeholder.style.display = 'none';
+        $('modalPlaceholder').style.display = 'none';
       } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
-        placeholder.innerHTML = '<span>⚠️</span><span>Connection lost or failed.<br>(Different network?)</span>';
-        placeholder.style.display = 'flex';
+        if (currentModalCamId === camId) {
+          $('modalPlaceholder').innerHTML = '<div style="color:#ff7676">⚠️</div><div>Connection lost or failed.<br>(Different network?)</div>';
+          $('modalPlaceholder').style.display = 'block';
+        }
         disconnectCamera(camId);
       }
     };
@@ -232,8 +274,8 @@ async function connectCamera(camId) {
 
   } catch (e) {
     console.error('Connection failed:', e);
-    placeholder.innerHTML = `<span>❌</span><span>Error: ${e.message}</span>`;
-    placeholder.style.display = 'flex';
+    $('modalPlaceholder').innerHTML = `<div style="color:#ff7676">❌</div><div>Error: ${e.message}</div>`;
+    $('modalPlaceholder').style.display = 'block';
   }
 }
 
@@ -243,6 +285,15 @@ function disconnectCamera(camId) {
     if (conn.iceInterval) clearInterval(conn.iceInterval);
     conn.pc.close();
     activeConnections.delete(camId);
+  }
+}
+
+function closeLivePlayer() {
+  $('liveModal').classList.remove('active');
+  $('modalVideo').srcObject = null;
+  if (currentModalCamId) {
+    disconnectCamera(currentModalCamId);
+    currentModalCamId = null;
   }
 }
 
