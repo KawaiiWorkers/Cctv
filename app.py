@@ -21,13 +21,21 @@ from supabase import create_client, Client
 # Configuration
 # ---------------------------------------------------------------------------
 SUPABASE_URL      = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY      = os.environ.get("SUPABASE_SERVICE_KEY", "")   # service role key
+SUPABASE_KEY      = os.environ.get("SUPABASE_SERVICE_KEY", "")
 SUPABASE_BUCKET   = os.environ.get("SUPABASE_BUCKET", "footages")
 ADMIN_USERNAME    = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD    = os.environ.get("ADMIN_PASSWORD", "admin123")
 SECRET_KEY        = os.environ.get("FLASK_SECRET", "change-me-in-production-" + uuid.uuid4().hex)
-PING_TIMEOUT      = 15          # seconds until camera considered OFFLINE
-SIGNED_URL_TTL    = 60 * 30     # 30-minute signed URL for playback
+PING_TIMEOUT      = 15
+SIGNED_URL_TTL    = 60 * 30
+
+# Public ICE servers – used by both camera and dashboard for WebRTC NAT traversal
+ICE_SERVERS = [
+    {"urls": "stun:stun.l.google.com:19302"},
+    {"urls": "stun:stun1.l.google.com:19302"},
+    # Add TURN servers here if cameras/dashboard are behind symmetric NAT:
+    # {"urls": "turn:your.turn.server:3478", "username": "user", "credential": "pass"}
+]
 
 # ---------------------------------------------------------------------------
 # Supabase client
@@ -44,26 +52,29 @@ if SUPABASE_URL and SUPABASE_KEY:
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024   # 50 MB per chunk upload
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Thread-safe in-memory state
 # ---------------------------------------------------------------------------
 _state_lock = threading.RLock()
 
-# camera_id -> {"name": str, "last_ping": float, "registered": float}
-# NOTE: this is only a fast local cache. The source of truth is a JSON file
-# in the Supabase bucket (REGISTRY_PATH), so the registry survives process
-# restarts and is shared across every gunicorn worker / dyno instead of
-# living in one process's private memory.
 cameras: dict[str, dict] = {}
 REGISTRY_PATH      = "_registry/cameras.json"
 _registry_synced   = 0.0
-REGISTRY_CACHE_TTL = 3   # seconds before we re-read the registry from Supabase
+REGISTRY_CACHE_TTL = 3
+
+pending_offers: dict[str, list] = {}
+pending_answers: dict[str, dict] = {}
+ice_queue: dict[str, dict[str, list]] = {}
+
+
+def _now() -> float:
+    return time.time()
 
 
 def _load_registry(force: bool = False):
-    """Refresh the in-memory `cameras` cache from the Supabase-backed registry."""
+    """Refresh the in-memory cameras cache from the Supabase-backed registry."""
     global _registry_synced
     if supabase is None:
         return cameras
@@ -77,14 +88,12 @@ def _load_registry(force: bool = False):
             cameras.update(data)
             _registry_synced = _now()
     except Exception:
-        # registry file doesn't exist yet (first run) or a transient error;
-        # don't wipe out whatever we already have cached locally.
         _registry_synced = _now()
     return cameras
 
 
 def _save_registry():
-    """Persist the current `cameras` cache back to the Supabase-backed registry."""
+    """Persist the current cameras cache back to the Supabase-backed registry."""
     global _registry_synced
     if supabase is None:
         return
@@ -100,25 +109,9 @@ def _save_registry():
     except Exception as e:
         print(f"[WARN] camera registry save failed: {e}")
 
-# camera_id -> list of pending offers from admin  (admin -> camera)
-# each item: {"sdp": str, "type": "offer", "session": str, "ts": float}
-pending_offers: dict[str, list] = {}
-
-# session_id -> answer from camera (camera -> admin)
-pending_answers: dict[str, dict] = {}
-
-# session_id -> list of ICE candidates queued FOR that session (both directions)
-# keyed further by "to": "camera" | "admin"
-ice_queue: dict[str, dict[str, list]] = {}
-
-
-def _now() -> float:
-    return time.time()
-
 
 def _cleanup_stale():
-    """Remove stale sessions / offline camera housekeeping (called opportunistically)."""
-    cutoff = _now() - 300  # 5 min
+    cutoff = _now() - 300
     with _state_lock:
         stale_sessions = [
             sid for sid, q in ice_queue.items()
@@ -205,8 +198,6 @@ def index():
 
 @app.route("/camera")
 def camera_page():
-    # Camera page can be opened directly on a phone via a share link.
-    # No admin session required (the phone is the sensor).
     return render_template("camera.html")
 
 
@@ -223,12 +214,22 @@ def footage_page():
 
 
 # ---------------------------------------------------------------------------
+# Public config endpoint (ICE servers for WebRTC)
+# ---------------------------------------------------------------------------
+@app.route("/api/config")
+def get_config():
+    """Public endpoint – returns WebRTC ICE server config.
+    Both camera and dashboard fetch this so they stay in sync."""
+    return jsonify({"iceServers": ICE_SERVERS})
+
+
+# ---------------------------------------------------------------------------
 # Camera registration / heartbeat
 # ---------------------------------------------------------------------------
 @app.route("/api/camera/register", methods=["POST"])
 def camera_register():
     data = request.get_json(silent=True) or {}
-    _load_registry()
+    _load_registry(force=True)  # Always force-load before modifying
     cam_id = (data.get("camera_id") or "").strip() or f"cam-{uuid.uuid4().hex[:8]}"
     name   = (data.get("name") or f"Camera-{cam_id[-4:]}").strip()
     with _state_lock:
@@ -248,7 +249,7 @@ def camera_ping():
     cam_id = data.get("camera_id")
     if not cam_id:
         return jsonify({"error": "camera_id required"}), 400
-    _load_registry()
+    _load_registry(force=True)  # Force-load to get latest state across workers
     with _state_lock:
         if cam_id not in cameras:
             return jsonify({"error": "unknown camera"}), 404
@@ -281,13 +282,6 @@ def list_cameras():
 
 # ---------------------------------------------------------------------------
 # WebRTC signaling
-#
-# Flow:
-#   1. Admin creates offer -> POST /api/webrtc/offer  (session_id generated)
-#   2. Camera long-polls its offers via /api/camera/ping response
-#   3. Camera answers -> POST /api/webrtc/answer
-#   4. Admin polls /api/webrtc/answer?session=...
-#   5. Both sides trickle ICE via /api/webrtc/ice (POST) and GET
 # ---------------------------------------------------------------------------
 @app.route("/api/webrtc/offer", methods=["POST"])
 @login_required
@@ -337,7 +331,7 @@ def webrtc_post_ice():
     data = request.get_json(silent=True) or {}
     session_id = data.get("session")
     candidate  = data.get("candidate")
-    to_side    = data.get("to")   # "camera" | "admin"
+    to_side    = data.get("to")
     if not session_id or candidate is None or to_side not in ("camera", "admin"):
         return jsonify({"error": "bad payload"}), 400
     with _state_lock:
@@ -398,8 +392,7 @@ def footage_upload():
     except Exception as e:
         return jsonify({"error": f"upload failed: {e}"}), 500
 
-    # touch heartbeat while we're at it
-    _load_registry()
+    _load_registry(force=True)
     touched = False
     with _state_lock:
         if cam_id in cameras:
@@ -418,12 +411,7 @@ def footage_list():
     cam = request.args.get("camera_id")
     prefix = cam or ""
     try:
-        # list top-level (camera folders) or a specific camera folder
         if not cam:
-            # aggregate: list every camera folder that actually exists in the
-            # bucket (folders come back with id == None), rather than relying
-            # on the camera registry — this way clips always show up even if
-            # a camera was never (re-)registered or the registry lagged.
             root = supabase.storage.from_(SUPABASE_BUCKET).list(
                 path="", options={"limit": 1000}
             )
@@ -474,7 +462,6 @@ def footage_list():
 @app.route("/api/footage/signed")
 @login_required
 def footage_signed():
-    """Return a short-lived signed URL for a private object."""
     _ensure_supabase()
     path = request.args.get("path", "")
     if not path:
@@ -490,10 +477,6 @@ def footage_signed():
 @app.route("/api/footage/stream")
 @login_required
 def footage_stream():
-    """
-    Secure backend proxy stream — pulls the private object from Supabase and
-    pipes it to the authenticated admin. Keeps the bucket private end-to-end.
-    """
     _ensure_supabase()
     path = request.args.get("path", "")
     if not path:
@@ -522,19 +505,44 @@ def footage_stream():
                     headers={"Cache-Control": "private, max-age=60"})
 
 
+# ---------------------------------------------------------------------------
+# MODIFIED: Footage delete – now supports BATCH deletion
+# ---------------------------------------------------------------------------
 @app.route("/api/footage/delete", methods=["POST"])
 @login_required
 def footage_delete():
     _ensure_supabase()
     data = request.get_json(silent=True) or {}
-    path = data.get("path")
-    if not path:
-        return jsonify({"error": "path required"}), 400
-    try:
-        supabase.storage.from_(SUPABASE_BUCKET).remove([path])
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+
+    # Support both single-path and multi-path deletion
+    paths = data.get("paths")        # list of paths for batch delete
+    single_path = data.get("path")   # single path for backward compat
+
+    if paths and isinstance(paths, list) and len(paths) > 0:
+        # ---- Batch deletion ----
+        deleted = []
+        failed  = []
+        for p in paths:
+            try:
+                supabase.storage.from_(SUPABASE_BUCKET).remove([p])
+                deleted.append(p)
+            except Exception as e:
+                failed.append({"path": p, "error": str(e)})
+        return jsonify({
+            "ok": len(failed) == 0,
+            "deleted": deleted,
+            "deleted_count": len(deleted),
+            "failed": failed,
+        })
+    elif single_path:
+        # ---- Single deletion (backward compatible) ----
+        try:
+            supabase.storage.from_(SUPABASE_BUCKET).remove([single_path])
+            return jsonify({"ok": True, "deleted": [single_path], "deleted_count": 1})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    else:
+        return jsonify({"error": "path or paths required"}), 400
 
 
 # ---------------------------------------------------------------------------
