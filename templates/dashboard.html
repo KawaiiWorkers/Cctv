@@ -16,7 +16,6 @@
     .toolbar{display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap}
     .btn{padding:8px 16px;border:0;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}
     .btn-primary{background:#4c8dff;color:#fff}
-    .btn-secondary{background:#22304d;color:#e6edf7;border:1px solid #2a3a5c}
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
     .cam-card{background:#131b2e;border:1px solid #22304d;border-radius:12px;overflow:hidden}
     .cam-video{position:relative;aspect-ratio:16/9;background:#000}
@@ -41,7 +40,7 @@
     .empty{text-align:center;padding:60px 20px;opacity:.5}
     .empty .icon{font-size:48px;margin-bottom:10px}
     .placeholder{display:flex;align-items:center;justify-content:center;height:100%;
-                 color:#445;font-size:14px;flex-direction:column;gap:8px}
+                 color:#445;font-size:14px;flex-direction:column;gap:8px;text-align:center;padding:10px}
   </style>
 </head>
 <body>
@@ -69,13 +68,9 @@
 </div>
 
 <script>
-// ═══════════════════════════════════════════════════════════════════════
-//  Dashboard – lists cameras and establishes WebRTC connections
-// ═══════════════════════════════════════════════════════════════════════
-
 let cameras = [];
 let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
-let activeConnections = new Map();  // camera_id -> { pc, sessionId, iceInterval }
+let activeConnections = new Map();
 
 const $ = id => document.getElementById(id);
 
@@ -152,57 +147,60 @@ function timeAgo(ts) {
   return `${Math.floor(diff/86400)}d ago`;
 }
 
-// --- WebRTC: connect to camera ---
 async function connectCamera(camId) {
-  // Disconnect existing connection if any
   disconnectCamera(camId);
 
   const videoEl = document.getElementById(`video-${camId}`);
   const placeholder = document.getElementById(`placeholder-${camId}`);
+  
+  placeholder.innerHTML = '<span>⏳</span><span>Connecting...</span>';
+  placeholder.style.display = 'flex';
 
   try {
     const pc = new RTCPeerConnection({ iceServers });
 
-    // Receive video/audio from camera
     pc.ontrack = (event) => {
-      videoEl.srcObject = event.streams[0];
-      if (placeholder) placeholder.style.display = 'none';
+      const stream = event.streams[0] || new MediaStream([event.track]);
+      videoEl.srcObject = stream;
+      placeholder.style.display = 'none';
     };
 
-    // Add recvonly transceivers
+    // FIX: Only request video, camera doesn't provide audio
     pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.addTransceiver('audio', { direction: 'recvonly' });
 
-    // Create offer
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    // Send offer to camera via server
     const res = await fetch('/api/webrtc/offer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ camera_id: camId, sdp: offer.sdp }),
     });
-    if (!res.ok) throw new Error('Offer rejected');
+    
+    if (!res.ok) throw new Error('Camera rejected offer');
     const data = await res.json();
     const sessionId = data.session;
 
-    // Send ICE candidates to camera
     pc.onicecandidate = async (event) => {
       if (event.candidate) {
         await fetch('/api/webrtc/ice', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            session: sessionId,
-            candidate: event.candidate,
-            to: 'camera',
-          }),
+          body: JSON.stringify({ session: sessionId, candidate: event.candidate, to: 'camera' }),
         });
       }
     };
 
-    // Poll for answer from camera
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') {
+        placeholder.style.display = 'none';
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+        placeholder.innerHTML = '<span>⚠️</span><span>Connection lost or failed.<br>(Different network?)</span>';
+        placeholder.style.display = 'flex';
+        disconnectCamera(camId);
+      }
+    };
+
     const answerPoll = setInterval(async () => {
       try {
         const res = await fetch(`/api/webrtc/answer?session=${sessionId}`);
@@ -211,7 +209,6 @@ async function connectCamera(camId) {
           clearInterval(answerPoll);
           await pc.setRemoteDescription(data.answer);
 
-          // Start polling for ICE candidates from camera
           const icePoll = setInterval(async () => {
             if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
               clearInterval(icePoll);
@@ -221,9 +218,7 @@ async function connectCamera(camId) {
               const res = await fetch(`/api/webrtc/ice?session=${sessionId}&to=admin`);
               const data = await res.json();
               if (data.candidates) {
-                for (const c of data.candidates) {
-                  await pc.addIceCandidate(c);
-                }
+                for (const c of data.candidates) await pc.addIceCandidate(c);
               }
             } catch (e) { /* ignore */ }
           }, 1000);
@@ -233,11 +228,12 @@ async function connectCamera(camId) {
       } catch (e) { /* ignore */ }
     }, 1000);
 
-    // Timeout: if no answer in 10s, stop polling
-    setTimeout(() => clearInterval(answerPoll), 10000);
+    setTimeout(() => clearInterval(answerPoll), 15000);
 
   } catch (e) {
     console.error('Connection failed:', e);
+    placeholder.innerHTML = `<span>❌</span><span>Error: ${e.message}</span>`;
+    placeholder.style.display = 'flex';
   }
 }
 
@@ -250,15 +246,11 @@ function disconnectCamera(camId) {
   }
 }
 
-// --- Auto-refresh camera list ---
 let refreshTimer = setInterval(loadCameras, 10000);
-
  $('refreshBtn').addEventListener('click', loadCameras);
 
-// --- Init ---
 loadConfig().then(loadCameras);
 
-// Cleanup on unload
 window.addEventListener('beforeunload', () => {
   activeConnections.forEach((conn, camId) => disconnectCamera(camId));
 });
