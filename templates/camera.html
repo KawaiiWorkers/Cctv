@@ -34,6 +34,15 @@
     .hidden{display:none}
     .error{width:100%;max-width:600px;margin-top:10px;padding:10px 14px;background:#2a1517;
            border:1px solid #ff4444;border-radius:8px;font-size:13px;color:#ff7676}
+    
+    /* Log System Styles */
+    .logs-container{width:100%;max-width:600px;margin-top:14px;background:#0a0f1a;border:1px solid #22304d;
+                    border-radius:10px;padding:10px;height:160px;overflow-y:auto;font-family:monospace;
+                    font-size:12px;line-height:1.5;color:#8b9dc3}
+    .logs-container .log-line{margin-bottom:2px;word-break:break-all}
+    .logs-container .log-line.success{color:#4ade80}
+    .logs-container .log-line.error{color:#ff7676}
+    .logs-container .log-line.info{color:#4c8dff}
   </style>
 </head>
 <body>
@@ -52,6 +61,8 @@
     <div class="row"><span class="label">Name</span><span class="val" id="camName">—</span></div>
     <div class="row"><span class="label">Status</span><span class="val offline" id="camStatus">Not started</span></div>
     <div class="row"><span class="label">Auto-record</span><span class="val" id="recStatus">OFF</span></div>
+    <div class="row"><span class="label">Recording Timer</span><span class="val" id="recTimer">0/15s</span></div>
+    <div class="row"><span class="label">Clips Saved</span><span class="val" id="savedCount">0</span></div>
     <div class="row"><span class="label">Viewers</span><span class="val" id="viewerCount">0</span></div>
   </div>
 
@@ -61,33 +72,29 @@
     <button class="btn-rec-toggle" id="recToggleBtn">Auto-Record: OFF</button>
   </div>
 
+  <div class="logs-container" id="logBox">
+    <div class="log-line info">[System] Waiting for camera to start...</div>
+  </div>
+
   <div class="error hidden" id="errBox"></div>
 
 <script>
-// ═══════════════════════════════════════════════════════════════════════
-//  CRITICAL FIX: Use RELATIVE URLs for ALL API calls.
-//  This ensures requests go to the server that served this page,
-//  regardless of which device (phone/tablet/desktop) opens this page.
-//  Previously, hardcoded "http://localhost:5000" broke when a different
-//  device accessed this page, because localhost pointed to the phone
-//  itself instead of the actual server.
-// ═══════════════════════════════════════════════════════════════════════
+const API = '';  // Relative URLs
 
-const API = '';  // empty string = relative URLs → always correct host
-
-// --- State ---
 let cameraId   = localStorage.getItem('cctv_camera_id') || '';
 let cameraName = localStorage.getItem('cctv_camera_name') || '';
 let localStream = null;
 let pingTimer   = null;
-let recTimer    = null;
 let mediaRecorder = null;
 let autoRecord  = false;
-let peerConnections = new Map();  // session_id -> RTCPeerConnection
+let peerConnections = new Map();
 let iceServers  = [{ urls: 'stun:stun.l.google.com:19302' }];
 let viewerCount = 0;
+let clipsSaved  = 0;
+let recInterval = null;
 
-// --- DOM ---
+const CLIP_DURATION = 15000;  // 15 seconds per clip
+
 const $ = id => document.getElementById(id);
 const video = $('preview');
 const startBtn = $('startBtn');
@@ -95,9 +102,19 @@ const stopBtn  = $('stopBtn');
 const recToggleBtn = $('recToggleBtn');
 const errBox  = $('errBox');
 
+function log(msg, type = '') {
+  const time = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.className = `log-line ${type}`;
+  line.textContent = `[${time}] ${msg}`;
+  $('logBox').appendChild(line);
+  $('logBox').scrollTop = $('logBox').scrollHeight;
+}
+
 function showError(msg) {
   errBox.textContent = msg;
   errBox.classList.remove('hidden');
+  log(msg, 'error');
   setTimeout(() => errBox.classList.add('hidden'), 5000);
 }
 
@@ -107,18 +124,16 @@ function setStatus(text, online) {
   el.className = 'val ' + (online ? 'online' : 'offline');
 }
 
-// --- Fetch ICE server config ---
 async function loadConfig() {
   try {
     const res = await fetch(`${API}/api/config`);
     const data = await res.json();
     if (data.iceServers) iceServers = data.iceServers;
-  } catch (e) { /* use defaults */ }
+    log('Loaded WebRTC config', 'info');
+  } catch (e) { log('Failed to load config', 'error'); }
 }
 
-// --- Register camera ---
 async function registerCamera() {
-  // Use a user-friendly name based on device info
   if (!cameraName) {
     const ua = navigator.userAgent;
     let platform = 'Device';
@@ -129,23 +144,28 @@ async function registerCamera() {
     cameraName = `${platform}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
   }
 
-  const res = await fetch(`${API}/api/camera/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ camera_id: cameraId || undefined, name: cameraName }),
-  });
-  if (!res.ok) throw new Error(`Register failed: ${res.status}`);
-  const data = await res.json();
-  cameraId   = data.camera_id;
-  cameraName = data.name;
-  localStorage.setItem('cctv_camera_id', cameraId);
-  localStorage.setItem('cctv_camera_name', cameraName);
-  $('camId').textContent = cameraId;
-  $('camName').textContent = cameraName;
-  setStatus('Online', true);
+  try {
+    const res = await fetch(`${API}/api/camera/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_id: cameraId || undefined, name: cameraName }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    cameraId   = data.camera_id;
+    cameraName = data.name;
+    localStorage.setItem('cctv_camera_id', cameraId);
+    localStorage.setItem('cctv_camera_name', cameraName);
+    $('camId').textContent = cameraId;
+    $('camName').textContent = cameraName;
+    setStatus('Online', true);
+    log(`Registered as ${cameraName} (${cameraId})`, 'success');
+  } catch (e) {
+    showError(`Registration failed: ${e.message}`);
+    throw e;
+  }
 }
 
-// --- Heartbeat + offer polling ---
 async function ping() {
   try {
     const res = await fetch(`${API}/api/camera/ping`, {
@@ -154,74 +174,64 @@ async function ping() {
       body: JSON.stringify({ camera_id: cameraId }),
     });
     if (res.status === 404) {
-      // Registry lost us (server restart) — re-register
+      log('Server lost registry. Re-registering...', 'info');
       await registerCamera();
       return;
     }
     if (!res.ok) return;
     const data = await res.json();
-    // Process any pending WebRTC offers from admin dashboard
     if (data.pending_offers && data.pending_offers.length > 0) {
+      log(`Received ${data.pending_offers.length} WebRTC offer(s)`, 'info');
       for (const offer of data.pending_offers) {
         handleOffer(offer);
       }
     }
   } catch (e) {
-    console.warn('Ping failed:', e);
+    log(`Ping failed: ${e.message}`, 'error');
   }
 }
 
-// --- WebRTC: handle offer from admin ---
 async function handleOffer(offer) {
   const sessionId = offer.session;
-  if (peerConnections.has(sessionId)) return;  // already handling
+  if (peerConnections.has(sessionId)) return;
 
   try {
     const pc = new RTCPeerConnection({ iceServers });
     peerConnections.set(sessionId, pc);
     viewerCount++;
     $('viewerCount').textContent = viewerCount;
+    log(`Starting WebRTC connection for viewer...`);
 
-    // Add local tracks to peer connection
     if (localStream) {
       localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
     }
 
-    // Set remote description (the offer from admin)
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
-
-    // Create and set local description (answer)
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
-    // Send answer back to admin
     await fetch(`${API}/api/webrtc/answer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session: sessionId, sdp: answer.sdp }),
     });
+    log('Answer sent to dashboard', 'success');
 
-    // Send ICE candidates to admin
     pc.onicecandidate = async (event) => {
       if (event.candidate) {
         await fetch(`${API}/api/webrtc/ice`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            session: sessionId,
-            candidate: event.candidate,
-            to: 'admin',
-          }),
+          body: JSON.stringify({ session: sessionId, candidate: event.candidate, to: 'admin' }),
         });
       }
     };
 
-    // Poll for ICE candidates from admin
     const icePoll = setInterval(async () => {
       if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
         clearInterval(icePoll);
         peerConnections.delete(sessionId);
-        viewerCount--;
+        viewerCount = Math.max(0, viewerCount - 1);
         $('viewerCount').textContent = viewerCount;
         return;
       }
@@ -229,29 +239,26 @@ async function handleOffer(offer) {
         const res = await fetch(`${API}/api/webrtc/ice?session=${sessionId}&to=camera`);
         const data = await res.json();
         if (data.candidates && data.candidates.length > 0) {
-          for (const c of data.candidates) {
-            await pc.addIceCandidate(c);
-          }
+          for (const c of data.candidates) await pc.addIceCandidate(c);
         }
       } catch (e) { /* ignore */ }
     }, 1000);
 
     pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') log('Viewer connected!', 'success');
       if (pc.connectionState === 'closed' || pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
         clearInterval(icePoll);
         peerConnections.delete(sessionId);
         viewerCount = Math.max(0, viewerCount - 1);
         $('viewerCount').textContent = viewerCount;
+        log('Viewer disconnected', 'error');
       }
     };
   } catch (e) {
-    console.error('Offer handling failed:', e);
+    log(`Offer handling failed: ${e.message}`, 'error');
     peerConnections.delete(sessionId);
   }
 }
-
-// --- Auto recording: record clips and upload periodically ---
-const CLIP_DURATION = 30000;  // 30 seconds per clip
 
 function startRecording() {
   if (!localStream || !autoRecord) return;
@@ -259,25 +266,29 @@ function startRecording() {
   try {
     const chunks = [];
     const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-      ? 'video/webm;codecs=vp9'
-      : 'video/webm';
+      ? 'video/webm;codecs=vp9' : 'video/webm';
 
     mediaRecorder = new MediaRecorder(localStream, { mimeType, videoBitsPerSecond: 500000 });
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
+    
+    let elapsed = 0;
+    $('recTimer').textContent = `${elapsed}/15s`;
+    recInterval = setInterval(() => {
+      elapsed++;
+      $('recTimer').textContent = `${elapsed}/15s`;
+    }, 1000);
+
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
     mediaRecorder.onstop = async () => {
+      if (recInterval) clearInterval(recInterval);
       const blob = new Blob(chunks, { type: 'video/webm' });
       if (blob.size > 1000) await uploadClip(blob);
-      // Start next clip if still recording
-      if (autoRecord && localStream) {
-        setTimeout(startRecording, 500);
-      }
+      if (autoRecord && localStream) setTimeout(startRecording, 500);
     };
     mediaRecorder.start();
     $('recBadge').classList.remove('hidden');
+    log('Recording started (15s clip)', 'info');
   } catch (e) {
-    console.error('Recording failed:', e);
+    log(`Recording failed: ${e.message}`, 'error');
     $('recBadge').classList.add('hidden');
   }
 }
@@ -286,65 +297,68 @@ function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
   }
+  if (recInterval) clearInterval(recInterval);
+  $('recTimer').textContent = '0/15s';
   $('recBadge').classList.add('hidden');
 }
 
 async function uploadClip(blob) {
+  log(`Uploading clip (${(blob.size / 1024).toFixed(1)} KB)...`);
   const formData = new FormData();
   formData.append('camera_id', cameraId);
   formData.append('file', blob, `clip-${Date.now()}.webm`);
   try {
-    await fetch(`${API}/api/footage/upload`, { method: 'POST', body: formData });
-    console.log('[Footage] Clip uploaded');
+    const res = await fetch(`${API}/api/footage/upload`, { method: 'POST', body: formData });
+    if (res.ok) {
+      clipsSaved++;
+      $('savedCount').textContent = clipsSaved;
+      log('Clip uploaded successfully', 'success');
+    } else {
+      log(`Upload failed: HTTP ${res.status}`, 'error');
+    }
   } catch (e) {
-    console.error('[Footage] Upload failed:', e);
+    log(`Upload failed: ${e.message}`, 'error');
   }
 }
 
-// --- Start camera ---
 async function startCamera() {
   try {
     startBtn.disabled = true;
     startBtn.textContent = 'Starting...';
+    log('Initializing camera...');
 
     await loadConfig();
 
-    // Get camera access
     localStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
       audio: false,
     });
     video.srcObject = localStream;
+    log('Camera access granted', 'success');
 
-    // Register with server
     await registerCamera();
 
-    // Start heartbeat (every 5 seconds)
     pingTimer = setInterval(ping, 5000);
-    // Immediate first ping
     ping();
+    log('Heartbeat started', 'info');
 
     startBtn.classList.add('hidden');
     stopBtn.classList.remove('hidden');
     startBtn.disabled = false;
     startBtn.textContent = 'Start Camera';
 
-    // Auto-start recording if enabled
     if (autoRecord) startRecording();
-
   } catch (e) {
-    showError(`Failed to start camera: ${e.message}`);
+    showError(`Failed to start: ${e.message}`);
     startBtn.disabled = false;
     startBtn.textContent = 'Start Camera';
   }
 }
 
-// --- Stop camera ---
 function stopCamera() {
   if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
   stopRecording();
 
-  // Close all peer connections
   peerConnections.forEach(pc => pc.close());
   peerConnections.clear();
   viewerCount = 0;
@@ -356,47 +370,28 @@ function stopCamera() {
   }
   video.srcObject = null;
   setStatus('Stopped', false);
+  log('Camera stopped', 'info');
 
   startBtn.classList.remove('hidden');
   stopBtn.classList.add('hidden');
 }
 
-// --- Toggle auto-record ---
 recToggleBtn.addEventListener('click', () => {
   autoRecord = !autoRecord;
   recToggleBtn.textContent = `Auto-Record: ${autoRecord ? 'ON' : 'OFF'}`;
   $('recStatus').textContent = autoRecord ? 'ON' : 'OFF';
-  if (autoRecord && localStream) {
-    startRecording();
-  } else if (!autoRecord) {
-    stopRecording();
-  }
+  if (autoRecord && localStream) startRecording();
+  else if (!autoRecord) stopRecording();
 });
 
 startBtn.addEventListener('click', startCamera);
 stopBtn.addEventListener('click', stopCamera);
 
-// --- Cleanup on page unload ---
 window.addEventListener('beforeunload', () => {
   if (pingTimer) clearInterval(pingTimer);
   stopRecording();
   if (localStream) localStream.getTracks().forEach(t => t.stop());
   peerConnections.forEach(pc => pc.close());
-});
-
-// Keep screen on while camera is active
-let wakeLock = null;
-async function requestWakeLock() {
-  try {
-    if ('wakeLock' in navigator) {
-      wakeLock = await navigator.wakeLock.request('screen');
-    }
-  } catch (e) { /* ignore */ }
-}
-document.addEventListener('visibilitychange', () => {
-  if (wakeLock !== null && document.visibilityState === 'visible' && localStream) {
-    requestWakeLock();
-  }
 });
 </script>
 </body>
