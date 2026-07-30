@@ -1,373 +1,267 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>🎥 CCTV Dashboard</title>
-<style>
-  *{box-sizing:border-box}
-  body{margin:0;background:#0b1220;color:#e6edf7;font-family:system-ui,Segoe UI,Roboto,sans-serif}
-  header{display:flex;align-items:center;padding:12px 18px;background:#0e1626;border-bottom:1px solid #1c2740;position:sticky;top:0;z-index:10}
-  header .brand{font-weight:700;letter-spacing:.4px}
-  header .spacer{flex:1}
-  header a{color:#9db6e6;text-decoration:none;margin-left:16px;font-size:14px}
-  header a.active{color:#fff}
-  .toggle{display:flex;align-items:center;gap:8px;background:#131b2e;border:1px solid #22304d;border-radius:999px;padding:4px;font-size:13px}
-  .toggle button{background:transparent;color:#9db6e6;border:0;border-radius:999px;padding:6px 12px;font-weight:600;cursor:pointer}
-  .toggle button.on{background:#4c8dff;color:#fff}
-  main{padding:18px;max-width:1400px;margin:0 auto}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
-  .card{background:#131b2e;border:1px solid #22304d;border-radius:14px;overflow:hidden;cursor:pointer;transition:transform .12s}
-  .card:hover{transform:translateY(-2px)}
-  .thumb{position:relative;background:#000;aspect-ratio:16/9;overflow:hidden}
-  .thumb video{width:100%;height:100%;object-fit:cover;background:#000}
-  .thumb .placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#516285;font-size:32px}
-  .badge{position:absolute;top:8px;left:8px;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.4px}
-  .badge.online{background:#155e2c;color:#5cf29a}
-  .badge.offline{background:#5b1e1e;color:#ff9b9b}
-  .badge.ai{position:absolute;top:8px;right:8px;background:#3b2b6b;color:#c4b5ff}
-  .meta{padding:10px 12px;display:flex;align-items:center;gap:10px}
-  .meta .name{font-weight:600;font-size:14px}
-  .meta .id{font-size:11px;opacity:.5;margin-left:auto}
-  .empty{text-align:center;opacity:.55;padding:60px 20px;font-size:14px}
-
-  /* Modal */
-  .modal{position:fixed;inset:0;background:rgba(0,0,0,.9);display:none;z-index:100}
-  .modal.open{display:flex;flex-direction:column}
-  .modal header{background:transparent;border:0}
-  .modal .close{background:#1c2740;border:0;color:#fff;border-radius:10px;padding:8px 12px;font-weight:600;cursor:pointer}
-  .stage{flex:1;position:relative;overflow:hidden;touch-action:none}
-  .stage video, .stage canvas{position:absolute;left:0;top:0;transform-origin:0 0}
-  .stage .status{position:absolute;top:12px;left:12px;background:rgba(0,0,0,.5);padding:6px 10px;border-radius:8px;font-size:12px}
-  .stage .hint{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.5);padding:6px 10px;border-radius:8px;font-size:11px;opacity:.7}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard • CCTV</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,-apple-system,sans-serif;background:#0b1220;color:#e6edf7;min-height:100vh}
+    .nav{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;
+         background:#131b2e;border-bottom:1px solid #22304d;position:sticky;top:0;z-index:100}
+    .nav-left{display:flex;align-items:center;gap:16px}
+    .nav h1{font-size:18px}
+    .nav a{color:#4c8dff;text-decoration:none;font-size:14px}
+    .container{padding:20px;max-width:1400px;margin:0 auto}
+    .toolbar{display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+    .btn{padding:8px 16px;border:0;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}
+    .btn-primary{background:#4c8dff;color:#fff}
+    .btn-secondary{background:#22304d;color:#e6edf7;border:1px solid #2a3a5c}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+    .cam-card{background:#131b2e;border:1px solid #22304d;border-radius:12px;overflow:hidden}
+    .cam-video{position:relative;aspect-ratio:16/9;background:#000}
+    .cam-video video{width:100%;height:100%;object-fit:cover}
+    .cam-status{position:absolute;top:8px;left:8px;padding:3px 10px;border-radius:6px;
+                font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px}
+    .cam-status.online{background:rgba(34,197,94,.2);color:#4ade80}
+    .cam-status.offline{background:rgba(255,68,68,.2);color:#ff7676}
+    .cam-status .dot{width:7px;height:7px;border-radius:50%}
+    .cam-status.online .dot{background:#4ade80;animation:pulse 1.5s infinite}
+    .cam-status.offline .dot{background:#ff7676}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    .cam-info{padding:12px 14px}
+    .cam-info .name{font-size:15px;font-weight:600}
+    .cam-info .meta{font-size:12px;opacity:.5;margin-top:4px}
+    .cam-actions{display:flex;gap:8px;margin-top:10px}
+    .cam-actions button{flex:1;padding:8px;border:0;border-radius:8px;font-size:13px;
+                        font-weight:600;cursor:pointer}
+    .btn-view{background:#4c8dff;color:#fff}
+    .btn-view:disabled{opacity:.4;cursor:not-allowed}
+    .btn-footage{background:#22304d;color:#e6edf7;border:1px solid #2a3a5c}
+    .empty{text-align:center;padding:60px 20px;opacity:.5}
+    .empty .icon{font-size:48px;margin-bottom:10px}
+    .placeholder{display:flex;align-items:center;justify-content:center;height:100%;
+                 color:#445;font-size:14px;flex-direction:column;gap:8px}
+  </style>
 </head>
 <body>
-<header>
-  <div class="brand">🎥 CCTV Console</div>
-  <div class="spacer"></div>
-  <div class="toggle" title="AI allocation mode">
-    <button id="modeMobile">📱 Mobile</button>
-    <button id="modeDesktop" class="on">💻 Desktop AI</button>
+
+<div class="nav">
+  <div class="nav-left">
+    <h1>🎥 CCTV Dashboard</h1>
+    <a href="/footage">🎬 Footage</a>
   </div>
-  <a href="/dashboard" class="active">Dashboard</a>
-  <a href="/footage">Footage</a>
   <a href="/logout">Logout</a>
-</header>
+</div>
 
-<main>
-  <div id="grid" class="grid"></div>
-  <div id="empty" class="empty" style="display:none">No cameras yet. Open <code>/camera</code> on a phone to register one.</div>
-</main>
+<div class="container">
+  <div class="toolbar">
+    <button class="btn btn-primary" id="refreshBtn">🔄 Refresh Cameras</button>
+    <span style="opacity:.6;font-size:13px" id="camCount">0 cameras</span>
+  </div>
 
-<!-- Fullscreen viewer -->
-<div class="modal" id="modal">
-  <header>
-    <div class="brand" id="modalName">—</div>
-    <div class="spacer"></div>
-    <span id="modalStatus" style="opacity:.7;font-size:12px;margin-right:12px">connecting…</span>
-    <button class="close" id="modalClose">✕ Close</button>
-  </header>
-  <div class="stage" id="stage">
-    <video id="stageVideo" autoplay playsinline muted></video>
-    <canvas id="stageCanvas"></canvas>
-    <div class="status" id="stageStatus">—</div>
-    <div class="hint">Desktop: scroll to zoom, drag to pan • Mobile: pinch to zoom, drag to pan</div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">
+    <div class="icon">📹</div>
+    <div>No cameras registered yet</div>
+    <div style="margin-top:8px;font-size:13px">Open <a href="/camera" style="color:#4c8dff">/camera</a> on a device to add a camera</div>
   </div>
 </div>
 
-<!-- TF.js loaded lazily only in Desktop AI mode -->
 <script>
-'use strict';
+// ═══════════════════════════════════════════════════════════════════════
+//  Dashboard – lists cameras and establishes WebRTC connections
+// ═══════════════════════════════════════════════════════════════════════
 
-/* ============================================================
- * Mode toggle: 📱 Mobile  vs  💻 Desktop AI
- *   - Desktop AI Mode  → live preview runs coco-ssd in worker
- *   - Mobile Mode      → live preview has NO AI, footage scanning does
- * ============================================================ */
-let MODE = localStorage.getItem('cctv_mode') || 'desktop';   // 'mobile' | 'desktop'
-function setMode(m){
-  MODE = m;
-  localStorage.setItem('cctv_mode', m);
-  document.getElementById('modeMobile').classList.toggle('on',  m==='mobile');
-  document.getElementById('modeDesktop').classList.toggle('on', m==='desktop');
-  if (m === 'desktop') ensureDetectorLoaded();
-  // Re-render badges
-  document.querySelectorAll('.badge.ai').forEach(b => b.style.display = (m==='desktop'?'inline-block':'none'));
-}
-document.getElementById('modeMobile').onclick  = () => setMode('mobile');
-document.getElementById('modeDesktop').onclick = () => setMode('desktop');
+let cameras = [];
+let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+let activeConnections = new Map();  // camera_id -> { pc, sessionId, iceInterval }
 
-/* ============================================================
- * Detector — TF.js coco-ssd in a Web Worker
- * ============================================================ */
-let detectorWorker = null;
-let detectorReady  = false;
+const $ = id => document.getElementById(id);
 
-function ensureDetectorLoaded(){
-  if (detectorWorker) return;
-  const workerCode = `
-    self.importScripts(
-      'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js',
-      'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js'
-    );
-    let model = null;
-    (async () => {
-      try {
-        await tf.setBackend('webgl'); await tf.ready();
-        model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-        self.postMessage({ type: 'ready' });
-      } catch(e){ self.postMessage({ type:'error', message: e.message }); }
-    })();
-    self.onmessage = async (ev) => {
-      const { type, bitmap, id } = ev.data;
-      if (type !== 'detect' || !model) return;
-      try {
-        const preds = await model.detect(bitmap, 6, 0.55);
-        self.postMessage({ type:'result', id, preds });
-      } catch(e){ self.postMessage({ type:'result', id, preds: [] }); }
-      try{ bitmap.close && bitmap.close(); }catch{}
-    };
-  `;
-  const blob = new Blob([workerCode], { type: 'application/javascript' });
-  detectorWorker = new Worker(URL.createObjectURL(blob));
-  detectorWorker.onmessage = (ev) => {
-    if (ev.data.type === 'ready') { detectorReady = true; console.log('[ai] detector ready'); }
-    else if (ev.data.type === 'result') { window.dispatchEvent(new CustomEvent('ai:'+ev.data.id, { detail: ev.data.preds })); }
-    else if (ev.data.type === 'error') { console.warn('[ai] error', ev.data.message); }
-  };
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    const data = await res.json();
+    if (data.iceServers) iceServers = data.iceServers;
+  } catch (e) { /* use defaults */ }
 }
 
-/* ============================================================
- * Camera list + grid rendering
- * ============================================================ */
-async function fetchCameras(){
-  const r = await fetch('/api/cameras'); const j = await r.json();
-  renderGrid(j.cameras || []);
-}
-setInterval(fetchCameras, 4000);
-
-function renderGrid(cams){
-  const grid = document.getElementById('grid');
-  document.getElementById('empty').style.display = cams.length ? 'none' : '';
-  grid.innerHTML = cams.map(c => `
-    <div class="card" data-id="${c.id}" data-name="${escapeHtml(c.name)}" data-online="${c.online?1:0}">
-      <div class="thumb">
-        <div class="placeholder">📷</div>
-        <span class="badge ${c.online?'online':'offline'}">${c.online?'● ONLINE':'○ OFFLINE'}</span>
-        ${MODE==='desktop' ? '<span class="badge ai">AI</span>' : ''}
-      </div>
-      <div class="meta"><span class="name">${escapeHtml(c.name)}</span><span class="id">${c.id.slice(-6)}</span></div>
-    </div>
-  `).join('');
-  grid.querySelectorAll('.card').forEach(el => {
-    el.onclick = () => openViewer(el.dataset.id, el.dataset.name, el.dataset.online==='1');
-  });
-}
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-/* ============================================================
- * WebRTC viewer + zoom/pan + optional AI overlay
- * ============================================================ */
-let currentPC = null, currentSession = null, aiLoopId = null, icePullId = null;
-const stage    = document.getElementById('stage');
-const stageVid = document.getElementById('stageVideo');
-const stageCan = document.getElementById('stageCanvas');
-const stageCtx = stageCan.getContext('2d');
-
-let tx=0, ty=0, scale=1;
-function applyTransform(){
-  const t = `translate(${tx}px, ${ty}px) scale(${scale})`;
-  stageVid.style.transform = t;
-  stageCan.style.transform = t;
+async function loadCameras() {
+  try {
+    const res = await fetch('/api/cameras');
+    const data = await res.json();
+    cameras = data.cameras || [];
+    renderCameras();
+  } catch (e) {
+    console.error('Failed to load cameras:', e);
+  }
 }
 
-async function openViewer(camId, name, online){
-  document.getElementById('modal').classList.add('open');
-  document.getElementById('modalName').textContent = name;
-  document.getElementById('modalStatus').textContent = 'connecting…';
-  document.getElementById('stageStatus').textContent = name;
-  tx=0; ty=0; scale=1; applyTransform();
+function renderCameras() {
+  const grid = $('grid');
+  $('camCount').textContent = `${cameras.length} camera${cameras.length !== 1 ? 's' : ''}`;
 
-  if (!online){
-    document.getElementById('modalStatus').textContent = 'offline';
+  if (cameras.length === 0) {
+    grid.innerHTML = '';
+    $('empty').style.display = 'block';
     return;
   }
 
-  const pc = new RTCPeerConnection({ iceServers: [{ urls:'stun:stun.l.google.com:19302' }] });
-  currentPC = pc;
+  $('empty').style.display = 'none';
+  grid.innerHTML = cameras.map(cam => {
+    const statusClass = cam.online ? 'online' : 'offline';
+    const statusText  = cam.online ? 'ONLINE' : 'OFFLINE';
+    const lastSeen = cam.online ? 'Live' : `Last seen ${timeAgo(cam.last_ping)}`;
 
-  pc.ontrack = (ev) => {
-    stageVid.srcObject = ev.streams[0];
-    stageVid.onloadedmetadata = () => sizeStage();
-  };
-  pc.onconnectionstatechange = () => {
-    document.getElementById('modalStatus').textContent = pc.connectionState;
-    if (pc.connectionState === 'connected' && MODE === 'desktop') startAILoop();
-  };
+    return `
+      <div class="cam-card" data-cam-id="${cam.id}">
+        <div class="cam-video">
+          <div class="cam-status ${statusClass}">
+            <span class="dot"></span> ${statusText}
+          </div>
+          <video id="video-${cam.id}" autoplay muted playsinline></video>
+          <div class="placeholder" id="placeholder-${cam.id}">
+            <span>📹</span>
+            <span>${cam.online ? 'Click "View Live" to connect' : 'Camera offline'}</span>
+          </div>
+        </div>
+        <div class="cam-info">
+          <div class="name">${cam.name}</div>
+          <div class="meta">ID: ${cam.id} • ${lastSeen}</div>
+          <div class="cam-actions">
+            <button class="btn-view" onclick="connectCamera('${cam.id}')" ${cam.online ? '' : 'disabled'}>
+              ▶️ View Live
+            </button>
+            <button class="btn-footage" onclick="window.location.href='/footage?camera_id=${cam.id}'">
+              🎬 Footage
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
 
-  // Receive-only from camera → admin
-  pc.addTransceiver('video', { direction:'recvonly' });
-  pc.addTransceiver('audio', { direction:'recvonly' });
+function timeAgo(ts) {
+  if (!ts) return 'never';
+  const diff = Math.floor(Date.now() / 1000 - ts);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
 
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  const r = await fetch('/api/webrtc/offer', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ camera_id: camId, sdp: offer.sdp })
-  });
-  const j = await r.json();
-  currentSession = j.session;
+// --- WebRTC: connect to camera ---
+async function connectCamera(camId) {
+  // Disconnect existing connection if any
+  disconnectCamera(camId);
 
-  pc.onicecandidate = (ev) => {
-    if (ev.candidate){
-      fetch('/api/webrtc/ice', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ session: currentSession, to:'camera', candidate: ev.candidate })
-      }).catch(()=>{});
-    }
-  };
+  const videoEl = document.getElementById(`video-${camId}`);
+  const placeholder = document.getElementById(`placeholder-${camId}`);
 
-  // Poll for answer
-  (async function waitAnswer(){
-    for (let i=0; i<40 && currentPC===pc; i++){
-      await new Promise(r=>setTimeout(r, 800));
-      const rr = await fetch('/api/webrtc/answer?session='+encodeURIComponent(currentSession));
-      const jj = await rr.json();
-      if (jj.answer){
-        await pc.setRemoteDescription({ type:'answer', sdp: jj.answer.sdp });
-        return;
+  try {
+    const pc = new RTCPeerConnection({ iceServers });
+
+    // Receive video/audio from camera
+    pc.ontrack = (event) => {
+      videoEl.srcObject = event.streams[0];
+      if (placeholder) placeholder.style.display = 'none';
+    };
+
+    // Add recvonly transceivers
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+
+    // Create offer
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    // Send offer to camera via server
+    const res = await fetch('/api/webrtc/offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_id: camId, sdp: offer.sdp }),
+    });
+    if (!res.ok) throw new Error('Offer rejected');
+    const data = await res.json();
+    const sessionId = data.session;
+
+    // Send ICE candidates to camera
+    pc.onicecandidate = async (event) => {
+      if (event.candidate) {
+        await fetch('/api/webrtc/ice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session: sessionId,
+            candidate: event.candidate,
+            to: 'camera',
+          }),
+        });
       }
-    }
-  })();
+    };
 
-  // Poll ICE from camera
-  icePullId = setInterval(async () => {
-    if (currentPC !== pc) return clearInterval(icePullId);
-    try{
-      const rr = await fetch('/api/webrtc/ice?to=admin&session='+encodeURIComponent(currentSession));
-      const jj = await rr.json();
-      for (const c of (jj.candidates||[])) try{ await pc.addIceCandidate(c); }catch{}
-    }catch{}
-  }, 1200);
-}
+    // Poll for answer from camera
+    const answerPoll = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/webrtc/answer?session=${sessionId}`);
+        const data = await res.json();
+        if (data.answer) {
+          clearInterval(answerPoll);
+          await pc.setRemoteDescription(data.answer);
 
-function closeViewer(){
-  document.getElementById('modal').classList.remove('open');
-  if (aiLoopId) { cancelAnimationFrame(aiLoopId); aiLoopId = null; }
-  if (icePullId) { clearInterval(icePullId); icePullId = null; }
-  if (currentPC){ currentPC.close(); currentPC = null; }
-  currentSession = null;
-  stageVid.srcObject = null;
-  stageCtx.clearRect(0,0,stageCan.width, stageCan.height);
-}
-document.getElementById('modalClose').onclick = closeViewer;
+          // Start polling for ICE candidates from camera
+          const icePoll = setInterval(async () => {
+            if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+              clearInterval(icePoll);
+              return;
+            }
+            try {
+              const res = await fetch(`/api/webrtc/ice?session=${sessionId}&to=admin`);
+              const data = await res.json();
+              if (data.candidates) {
+                for (const c of data.candidates) {
+                  await pc.addIceCandidate(c);
+                }
+              }
+            } catch (e) { /* ignore */ }
+          }, 1000);
 
-function sizeStage(){
-  const w = stage.clientWidth, h = stage.clientHeight;
-  const vw = stageVid.videoWidth || 1920, vh = stageVid.videoHeight || 1080;
-  const s  = Math.min(w/vw, h/vh);
-  stageVid.style.width = vw+'px'; stageVid.style.height = vh+'px';
-  stageCan.width = vw; stageCan.height = vh;
-  stageCan.style.width = vw+'px'; stageCan.style.height = vh+'px';
-  scale = s; tx = (w - vw*s)/2; ty = (h - vh*s)/2;
-  applyTransform();
-}
-window.addEventListener('resize', ()=>{ if (currentPC) sizeStage(); });
+          activeConnections.set(camId, { pc, sessionId, iceInterval: icePoll });
+        }
+      } catch (e) { /* ignore */ }
+    }, 1000);
 
-/* ---- Zoom/pan: desktop wheel + drag ---- */
-stage.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const rect = stage.getBoundingClientRect();
-  const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
-  const factor = e.deltaY < 0 ? 1.12 : 0.89;
-  const newScale = Math.max(0.5, Math.min(8, scale * factor));
-  // zoom around cursor
-  tx = cx - (cx - tx) * (newScale/scale);
-  ty = cy - (cy - ty) * (newScale/scale);
-  scale = newScale; applyTransform();
-}, { passive:false });
+    // Timeout: if no answer in 10s, stop polling
+    setTimeout(() => clearInterval(answerPoll), 10000);
 
-let dragging=false, dragX=0, dragY=0;
-stage.addEventListener('mousedown', e => { dragging=true; dragX=e.clientX-tx; dragY=e.clientY-ty; });
-window.addEventListener('mousemove', e => { if (dragging){ tx=e.clientX-dragX; ty=e.clientY-dragY; applyTransform(); } });
-window.addEventListener('mouseup', ()=>{ dragging=false; });
-
-/* ---- Touch pinch-zoom & swipe-pan ---- */
-let touchStart = null;
-stage.addEventListener('touchstart', (e) => {
-  if (e.touches.length === 1) touchStart = { mode:'pan', x:e.touches[0].clientX-tx, y:e.touches[0].clientY-ty };
-  else if (e.touches.length === 2){
-    const [a,b] = e.touches;
-    const dist = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
-    const cx = (a.clientX+b.clientX)/2, cy = (a.clientY+b.clientY)/2;
-    touchStart = { mode:'pinch', dist, scale, cx, cy, tx, ty };
+  } catch (e) {
+    console.error('Connection failed:', e);
   }
-}, { passive:true });
-stage.addEventListener('touchmove', (e) => {
-  if (!touchStart) return;
-  e.preventDefault();
-  if (touchStart.mode==='pan' && e.touches.length===1){
-    tx = e.touches[0].clientX - touchStart.x;
-    ty = e.touches[0].clientY - touchStart.y;
-    applyTransform();
-  } else if (touchStart.mode==='pinch' && e.touches.length===2){
-    const [a,b] = e.touches;
-    const dist = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
-    const newScale = Math.max(0.5, Math.min(8, touchStart.scale * (dist/touchStart.dist)));
-    const rect = stage.getBoundingClientRect();
-    const cx = touchStart.cx - rect.left, cy = touchStart.cy - rect.top;
-    tx = cx - (cx - touchStart.tx) * (newScale/touchStart.scale);
-    ty = cy - (cy - touchStart.ty) * (newScale/touchStart.scale);
-    scale = newScale; applyTransform();
-  }
-}, { passive:false });
-stage.addEventListener('touchend', ()=>{ touchStart=null; }, { passive:true });
-
-/* ---- AI overlay (desktop mode only) ---- */
-function startAILoop(){
-  if (MODE !== 'desktop') return;
-  ensureDetectorLoaded();
-  const detectId = 'live-'+Math.random().toString(36).slice(2,8);
-  let busy = false;
-  let lastPreds = [];
-
-  const onResult = (ev) => { lastPreds = ev.detail || []; busy = false; };
-  window.addEventListener('ai:'+detectId, onResult);
-
-  const tick = async () => {
-    if (!currentPC) { window.removeEventListener('ai:'+detectId, onResult); return; }
-    aiLoopId = requestAnimationFrame(tick);
-
-    // draw overlay
-    stageCtx.clearRect(0,0,stageCan.width,stageCan.height);
-    stageCtx.lineWidth = 3; stageCtx.strokeStyle = '#5cf29a'; stageCtx.fillStyle = '#5cf29a';
-    stageCtx.font = 'bold 18px system-ui';
-    for (const p of lastPreds){
-      const [x,y,w,h] = p.bbox;
-      stageCtx.strokeRect(x,y,w,h);
-      const lbl = `${p.class} ${(p.score*100|0)}%`;
-      const tw = stageCtx.measureText(lbl).width + 10;
-      stageCtx.fillRect(x, y-22, tw, 22);
-      stageCtx.fillStyle = '#0b1220'; stageCtx.fillText(lbl, x+5, y-6);
-      stageCtx.fillStyle = '#5cf29a';
-    }
-
-    if (busy || !detectorReady || !stageVid.videoWidth) return;
-    busy = true;
-    try{
-      const bmp = await createImageBitmap(stageVid);
-      detectorWorker.postMessage({ type:'detect', bitmap: bmp, id: detectId }, [bmp]);
-    }catch{ busy = false; }
-  };
-  tick();
 }
 
-/* ============================================================
- * Boot
- * ============================================================ */
-setMode(MODE);
-fetchCameras();
+function disconnectCamera(camId) {
+  const conn = activeConnections.get(camId);
+  if (conn) {
+    if (conn.iceInterval) clearInterval(conn.iceInterval);
+    conn.pc.close();
+    activeConnections.delete(camId);
+  }
+}
+
+// --- Auto-refresh camera list ---
+let refreshTimer = setInterval(loadCameras, 10000);
+
+ $('refreshBtn').addEventListener('click', loadCameras);
+
+// --- Init ---
+loadConfig().then(loadCameras);
+
+// Cleanup on unload
+window.addEventListener('beforeunload', () => {
+  activeConnections.forEach((conn, camId) => disconnectCamera(camId));
+});
 </script>
 </body>
 </html>
