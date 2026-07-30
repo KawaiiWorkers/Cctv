@@ -1,253 +1,375 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>🎞 Footage • CCTV</title>
-<style>
-  *{box-sizing:border-box}
-  body{margin:0;background:#0b1220;color:#e6edf7;font-family:system-ui,Segoe UI,Roboto,sans-serif}
-  header{display:flex;align-items:center;padding:12px 18px;background:#0e1626;border-bottom:1px solid #1c2740;position:sticky;top:0;z-index:10}
-  header .brand{font-weight:700}
-  header .spacer{flex:1}
-  header a{color:#9db6e6;text-decoration:none;margin-left:16px;font-size:14px}
-  header a.active{color:#fff}
-  main{padding:18px;max-width:1400px;margin:0 auto;display:grid;grid-template-columns:320px 1fr;gap:16px}
-  @media(max-width:800px){ main{grid-template-columns:1fr} }
-  .side{background:#131b2e;border:1px solid #22304d;border-radius:14px;padding:12px;max-height:80vh;overflow:auto}
-  .side h3{margin:6px 0 12px;font-size:13px;letter-spacing:.3px;opacity:.75}
-  select{width:100%;padding:9px;border-radius:10px;background:#0e1626;color:#e6edf7;border:1px solid #2a3a5c;margin-bottom:10px}
-  .item{padding:10px;border-radius:10px;cursor:pointer;font-size:13px;border:1px solid transparent}
-  .item:hover{background:#1a2340}
-  .item.active{background:#1a2340;border-color:#4c8dff}
-  .item .n{font-weight:600}
-  .item .s{opacity:.55;font-size:11px;margin-top:2px}
-  .empty{opacity:.55;font-size:13px;padding:20px;text-align:center}
-  .player{background:#131b2e;border:1px solid #22304d;border-radius:14px;padding:12px}
-  .stage{background:#000;border-radius:10px;position:relative;overflow:hidden;aspect-ratio:16/9}
-  video, canvas.overlay{position:absolute;inset:0;width:100%;height:100%}
-  canvas.overlay{pointer-events:none}
-  .row{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
-  button{background:#1b2440;color:#e6edf7;border:1px solid #2a3a5c;border-radius:10px;padding:8px 12px;font-weight:600;cursor:pointer}
-  button.primary{background:#4c8dff;border-color:#4c8dff;color:#fff}
-  button.danger{background:#7b1d1d;border-color:#7b1d1d;color:#fff}
-  .badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700}
-  .badge.human{background:#155e2c;color:#5cf29a}
-  .badge.none{background:#2a3a5c;color:#9db6e6}
-  .meta{font-size:12px;opacity:.7}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Footage • CCTV</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,-apple-system,sans-serif;background:#0b1220;color:#e6edf7;min-height:100vh}
+    .nav{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;
+         background:#131b2e;border-bottom:1px solid #22304d;position:sticky;top:0;z-index:100}
+    .nav-left{display:flex;align-items:center;gap:16px}
+    .nav h1{font-size:18px}
+    .nav a{color:#4c8dff;text-decoration:none;font-size:14px}
+    .toolbar{display:flex;align-items:center;gap:10px;padding:14px 20px;flex-wrap:wrap}
+    select{padding:8px 12px;border-radius:8px;border:1px solid #2a3a5c;background:#0e1626;
+           color:#e6edf7;font-size:14px;outline:none}
+    .btn{padding:8px 16px;border:0;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:.15s}
+    .btn-danger{background:#dc3545;color:#fff}
+    .btn-danger:disabled{opacity:.4;cursor:not-allowed}
+    .btn-secondary{background:#22304d;color:#e6edf7;border:1px solid #2a3a5c}
+    .btn-refresh{background:#4c8dff;color:#fff}
+    .selection-info{font-size:13px;opacity:.7;margin-left:auto}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;padding:0 20px 20px}
+    .card{background:#131b2e;border:1px solid #22304d;border-radius:12px;overflow:hidden;transition:.15s}
+    .card:hover{border-color:#3a4a6c}
+    .card.selected{border-color:#4c8dff;background:#16203a}
+    .card-video{position:relative;aspect-ratio:16/9;background:#000;cursor:pointer}
+    .card-video video{width:100%;height:100%;object-fit:cover}
+    .card-video .play-overlay{position:absolute;inset:0;display:flex;align-items:center;
+         justify-content:center;background:rgba(0,0,0,.4);opacity:0;transition:.2s}
+    .card-video:hover .play-overlay{opacity:1}
+    .card-video .play-icon{font-size:36px}
+    .card-checkbox{position:absolute;top:8px;left:8px;z-index:5}
+    .card-checkbox input{width:20px;height:20px;cursor:pointer;accent-color:#4c8dff}
+    .card-info{padding:10px 14px}
+    .card-info .name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .card-info .meta{font-size:11px;opacity:.5;margin-top:3px;display:flex;gap:10px}
+    .empty{text-align:center;padding:60px 20px;opacity:.5}
+    .empty .icon{font-size:48px;margin-bottom:10px}
+    .loading{text-align:center;padding:40px;opacity:.5}
+    .select-all-wrap{display:flex;align-items:center;gap:8px}
+    .select-all-wrap input{width:18px;height:18px;accent-color:#4c8dff}
+    .select-all-wrap label{font-size:14px;cursor:pointer}
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;
+           justify-content:center;z-index:1000;padding:20px}
+    .modal.active{display:flex}
+    .modal video{max-width:90vw;max-height:85vh;border-radius:12px}
+    .modal-close{position:absolute;top:20px;right:30px;font-size:32px;color:#fff;cursor:pointer;
+                 background:rgba(0,0,0,.5);width:44px;height:44px;border-radius:50%;border:0;
+                 display:flex;align-items:center;justify-content:center}
+    .confirm-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;
+                   justify-content:center;z-index:1000}
+    .confirm-modal.active{display:flex}
+    .confirm-box{background:#131b2e;border:1px solid #22304d;border-radius:16px;padding:28px;
+                 max-width:400px;width:90%;text-align:center}
+    .confirm-box h2{font-size:18px;margin-bottom:10px}
+    .confirm-box p{font-size:14px;opacity:.7;margin-bottom:20px}
+    .confirm-box .actions{display:flex;gap:10px}
+    .confirm-box .actions button{flex:1;padding:10px;border:0;border-radius:8px;font-size:14px;
+                                 font-weight:600;cursor:pointer}
+    .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#131b2e;
+           border:1px solid #22304d;padding:12px 24px;border-radius:10px;font-size:14px;
+           z-index:2000;opacity:0;transition:.3s;pointer-events:none}
+    .toast.show{opacity:1}
+  </style>
 </head>
 <body>
-<header>
-  <div class="brand">🎞 Footage</div>
-  <div class="spacer"></div>
-  <a href="/dashboard">Dashboard</a>
-  <a href="/footage" class="active">Footage</a>
+
+<div class="nav">
+  <div class="nav-left">
+    <h1>🎬 Footage</h1>
+    <a href="/dashboard">← Dashboard</a>
+  </div>
   <a href="/logout">Logout</a>
-</header>
+</div>
 
-<main>
-  <aside class="side">
-    <h3>CAMERA</h3>
-    <select id="camSel"><option value="">All cameras</option></select>
-    <h3>CLIPS</h3>
-    <div id="list"></div>
-  </aside>
+<div class="toolbar">
+  <select id="camFilter">
+    <option value="">All Cameras</option>
+  </select>
+  <button class="btn btn-refresh" id="refreshBtn">🔄 Refresh</button>
 
-  <section class="player">
-    <div class="stage" id="stage">
-      <video id="vid" controls playsinline preload="metadata"></video>
-      <canvas class="overlay" id="ov"></canvas>
+  <div class="select-all-wrap">
+    <input type="checkbox" id="selectAll">
+    <label for="selectAll">Select All</label>
+  </div>
+
+  <button class="btn btn-danger" id="deleteSelectedBtn" disabled>🗑 Delete Selected (<span id="selectedCount">0</span>)</button>
+  <button class="btn btn-danger" id="deleteAllBtn">🗑 Delete All</button>
+
+  <span class="selection-info" id="totalCount">0 clips</span>
+</div>
+
+<div class="loading" id="loading">Loading footage...</div>
+<div class="grid" id="grid" style="display:none"></div>
+<div class="empty" id="empty" style="display:none">
+  <div class="icon">📁</div>
+  <div>No footage found</div>
+</div>
+
+<!-- Video player modal -->
+<div class="modal" id="playerModal">
+  <button class="modal-close" onclick="closePlayer()">✕</button>
+  <video id="player" controls autoplay></video>
+</div>
+
+<!-- Delete confirmation modal -->
+<div class="confirm-modal" id="confirmModal">
+  <div class="confirm-box">
+    <h2 id="confirmTitle">Delete clips?</h2>
+    <p id="confirmMsg">This action cannot be undone.</p>
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="closeConfirm()">Cancel</button>
+      <button class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
     </div>
-    <div class="row">
-      <div id="clipName" class="meta">Select a clip to play.</div>
-      <span class="spacer" style="flex:1"></span>
-      <span id="aiBadge" class="badge none">🧠 not scanned</span>
-      <button id="btnScan">🔍 Scan for humans</button>
-      <button id="btnDl" class="primary">⬇ Download</button>
-      <button id="btnDel" class="danger">🗑 Delete</button>
-    </div>
-    <div id="detStatus" class="meta" style="margin-top:8px"></div>
-  </section>
-</main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
 
 <script>
-'use strict';
+// ═══════════════════════════════════════════════════════════════════════
+//  Footage page with multi-select and batch delete
+// ═══════════════════════════════════════════════════════════════════════
 
-/* ============================================================
- * State
- * ============================================================ */
-let items = [];
-let current = null;   // { path, camera_id, name, ... }
-let signedUrl = null;
-let detector = null;
-let scanning = false;
-const MODE = localStorage.getItem('cctv_mode') || 'desktop';
+let allItems = [];
+let selectedPaths = new Set();
+let pendingDeleteAction = null;
 
 const $ = id => document.getElementById(id);
 
-/* ============================================================
- * Load list + camera selector
- * ============================================================ */
-async function loadCameras(){
-  const r = await fetch('/api/cameras'); const j = await r.json();
-  const sel = $('camSel');
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">All cameras</option>' +
-    (j.cameras||[]).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
-  sel.value = cur;
+function showToast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
 }
-async function loadList(){
-  const cam = $('camSel').value;
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+
+// --- Load footage ---
+async function loadFootage() {
+  $('loading').style.display = 'block';
+  $('grid').style.display = 'none';
+  $('empty').style.display = 'none';
+
+  const cam = $('camFilter').value;
   const url = cam ? `/api/footage/list?camera_id=${encodeURIComponent(cam)}` : '/api/footage/list';
-  const r = await fetch(url); const j = await r.json();
-  items = j.items || [];
-  renderList();
-}
-function renderList(){
-  const box = $('list');
-  if (!items.length){ box.innerHTML = '<div class="empty">No clips yet.</div>'; return; }
-  box.innerHTML = items.map((it,i) => `
-    <div class="item" data-i="${i}">
-      <div class="n">${escapeHtml(it.name)}</div>
-      <div class="s">${it.camera_id} • ${fmtSize(it.size)} • ${fmtDate(it.created_at)}</div>
-    </div>
-  `).join('');
-  box.querySelectorAll('.item').forEach(el => el.onclick = () => selectItem(+el.dataset.i));
-}
-$('camSel').onchange = loadList;
 
-/* ============================================================
- * Playback via secure backend stream
- * ============================================================ */
-async function selectItem(i){
-  current = items[i];
-  document.querySelectorAll('.item').forEach((el,idx) => el.classList.toggle('active', idx===i));
-  $('clipName').textContent = current.name + '  •  ' + current.camera_id;
-  $('aiBadge').className = 'badge none'; $('aiBadge').textContent = '🧠 not scanned';
-  $('detStatus').textContent = '';
-  // Use secure /api/footage/stream (private bucket) — cookie-authenticated
-  const url = `/api/footage/stream?path=${encodeURIComponent(current.path)}`;
-  $('vid').src = url;
-  // Signed URL for optional download
-  const sr = await fetch(`/api/footage/signed?path=${encodeURIComponent(current.path)}`);
-  const sj = await sr.json(); signedUrl = sj.url || null;
-  // In Mobile Mode we auto-scan on view (per spec: shift AI to footage)
-  if (MODE === 'mobile') autoScanWhenReady();
-}
-
-$('btnDl').onclick = () => {
-  if (!current) return;
-  const url = signedUrl || `/api/footage/stream?path=${encodeURIComponent(current.path)}`;
-  const a = document.createElement('a'); a.href = url; a.download = current.name; a.click();
-};
-
-$('btnDel').onclick = async () => {
-  if (!current) return;
-  if (!confirm('Delete '+current.name+' ?')) return;
-  await fetch('/api/footage/delete', { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ path: current.path }) });
-  current = null; $('vid').removeAttribute('src'); $('vid').load();
-  await loadList();
-};
-
-/* ============================================================
- * On-demand human detection (coco-ssd, main thread — clip playback is short)
- * ============================================================ */
-async function ensureDetector(){
-  if (detector) return detector;
-  $('detStatus').textContent = 'Loading detector…';
-  await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js');
-  await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js');
-  await tf.setBackend('webgl'); await tf.ready();
-  detector = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-  $('detStatus').textContent = 'Detector ready.';
-  return detector;
-}
-function loadScript(src){
-  return new Promise((res, rej) => {
-    if ([...document.scripts].some(s=>s.src===src)) return res();
-    const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej;
-    document.head.appendChild(s);
-  });
-}
-
-async function autoScanWhenReady(){
-  const v = $('vid');
-  if (!v.readyState) v.onloadeddata = () => scanClip();
-  else scanClip();
-}
-
-$('btnScan').onclick = () => scanClip();
-
-async function scanClip(){
-  if (!current || scanning) return;
-  scanning = true;
-  const v = $('vid'), ov = $('ov'), ctx = ov.getContext('2d');
-  try{
-    await ensureDetector();
-    ov.width = v.videoWidth || 640; ov.height = v.videoHeight || 360;
-    // Sample up to 6 frames spread over the clip
-    const samples = 6;
-    const dur = v.duration && isFinite(v.duration) ? v.duration : 15;
-    let anyHuman = false, total = 0;
-    for (let i=0; i<samples; i++){
-      const t = (i + 0.5) * (dur / samples);
-      await seekTo(v, t);
-      const preds = await detector.detect(v, 5, 0.5);
-      ctx.clearRect(0,0,ov.width, ov.height);
-      ctx.lineWidth = 3; ctx.strokeStyle = '#5cf29a'; ctx.fillStyle = '#5cf29a'; ctx.font = 'bold 18px system-ui';
-      for (const p of preds){
-        if (p.class === 'person'){ anyHuman = true; total++; }
-        const [x,y,w,h] = p.bbox;
-        ctx.strokeRect(x,y,w,h);
-        const lbl = `${p.class} ${(p.score*100|0)}%`;
-        const tw = ctx.measureText(lbl).width + 10;
-        ctx.fillRect(x, y-22, tw, 22);
-        ctx.fillStyle = '#0b1220'; ctx.fillText(lbl, x+5, y-6);
-        ctx.fillStyle = '#5cf29a';
-      }
-      $('detStatus').textContent = `Scanning… frame ${i+1}/${samples} at ${t.toFixed(1)}s`;
-    }
-    if (anyHuman){
-      $('aiBadge').className = 'badge human';
-      $('aiBadge').textContent = `👤 human detected (${total})`;
-    } else {
-      $('aiBadge').className = 'badge none';
-      $('aiBadge').textContent = '✓ no humans found';
-    }
-    $('detStatus').textContent = 'Scan complete.';
-    // Rewind for viewing
-    v.currentTime = 0;
-  } catch(e){
-    $('detStatus').textContent = 'Scan failed: '+e.message;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    allItems = data.items || [];
+    renderGrid();
+    populateCameraFilter();
+  } catch (e) {
+    showToast('Failed to load footage: ' + e.message);
   } finally {
-    scanning = false;
+    $('loading').style.display = 'none';
   }
 }
-function seekTo(v, t){
-  return new Promise(res => {
-    const on = () => { v.removeEventListener('seeked', on); res(); };
-    v.addEventListener('seeked', on);
-    try{ v.currentTime = Math.min(t, (v.duration||t)-0.05); }catch{ res(); }
-  });
+
+function populateCameraFilter() {
+  const camIds = [...new Set(allItems.map(i => i.camera_id))];
+  const current = $('camFilter').value;
+  $('camFilter').innerHTML = '<option value="">All Cameras</option>' +
+    camIds.map(c => `<option value="${c}" ${c === current ? 'selected' : ''}>${c}</option>`).join('');
 }
 
-/* ============================================================
- * Utils
- * ============================================================ */
-function fmtSize(b){ if (!b) return '—'; const u=['B','KB','MB','GB']; let i=0; while(b>=1024 && i<3){ b/=1024; i++; } return b.toFixed(1)+' '+u[i]; }
-function fmtDate(s){ if (!s) return ''; try{ return new Date(s).toLocaleString(); }catch{ return s; } }
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// --- Render grid ---
+function renderGrid() {
+  const grid = $('grid');
+  $('totalCount').textContent = `${allItems.length} clip${allItems.length !== 1 ? 's' : ''}`;
 
-/* ============================================================
- * Boot
- * ============================================================ */
-(async () => {
-  await loadCameras();
-  await loadList();
-  setInterval(loadList, 15000);
-})();
+  if (allItems.length === 0) {
+    $('empty').style.display = 'block';
+    grid.style.display = 'none';
+    return;
+  }
+
+  $('empty').style.display = 'none';
+  grid.style.display = 'grid';
+  grid.innerHTML = allItems.map(item => {
+    const isSelected = selectedPaths.has(item.path);
+    return `
+      <div class="card ${isSelected ? 'selected' : ''}" data-path="${item.path}">
+        <div class="card-video">
+          <div class="card-checkbox">
+            <input type="checkbox" class="clip-checkbox" data-path="${item.path}" ${isSelected ? 'checked' : ''}>
+          </div>
+          <div class="play-overlay" onclick="playVideo('${item.path}')">
+            <span class="play-icon">▶️</span>
+          </div>
+          <video preload="metadata" muted
+            src="/api/footage/stream?path=${encodeURIComponent(item.path)}#t=0.1"
+            onloadeddata="this.currentTime=0.1"></video>
+        </div>
+        <div class="card-info">
+          <div class="name">${item.name}</div>
+          <div class="meta">
+            <span>📷 ${item.camera_id}</span>
+            <span>📦 ${formatSize(item.size)}</span>
+            <span>🕐 ${formatDate(item.created_at)}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Attach checkbox listeners
+  document.querySelectorAll('.clip-checkbox').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const path = cb.dataset.path;
+      if (cb.checked) {
+        selectedPaths.add(path);
+        cb.closest('.card').classList.add('selected');
+      } else {
+        selectedPaths.delete(path);
+        cb.closest('.card').classList.remove('selected');
+      }
+      updateSelectionUI();
+    });
+  });
+
+  updateSelectionUI();
+}
+
+// --- Selection UI updates ---
+function updateSelectionUI() {
+  const count = selectedPaths.size;
+  $('selectedCount').textContent = count;
+  $('deleteSelectedBtn').disabled = count === 0;
+
+  const allCheckable = document.querySelectorAll('.clip-checkbox');
+  const allChecked = allCheckable.length > 0 && allCheckedCount() === allCheckable.length;
+  $('selectAll').checked = allChecked;
+}
+
+function allCheckedCount() {
+  let n = 0;
+  document.querySelectorAll('.clip-checkbox').forEach(cb => { if (cb.checked) n++; });
+  return n;
+}
+
+// --- Select All ---
+ $('selectAll').addEventListener('change', (e) => {
+  const checked = e.target.checked;
+  document.querySelectorAll('.clip-checkbox').forEach(cb => {
+    cb.checked = checked;
+    const path = cb.dataset.path;
+    if (checked) {
+      selectedPaths.add(path);
+      cb.closest('.card').classList.add('selected');
+    } else {
+      selectedPaths.delete(path);
+      cb.closest('.card').classList.remove('selected');
+    }
+  });
+  updateSelectionUI();
+});
+
+// --- Delete Selected ---
+ $('deleteSelectedBtn').addEventListener('click', () => {
+  const count = selectedPaths.size;
+  if (count === 0) return;
+  showConfirm(
+    `Delete ${count} clip${count !== 1 ? 's' : ''}?`,
+    `You are about to permanently delete ${count} clip${count !== 1 ? 's' : ''}. This cannot be undone.`,
+    () => deletePaths([...selectedPaths])
+  );
+});
+
+// --- Delete All ---
+ $('deleteAllBtn').addEventListener('click', () => {
+  if (allItems.length === 0) return;
+  showConfirm(
+    `Delete ALL ${allItems.length} clips?`,
+    `This will permanently delete every clip${$('camFilter').value ? ' for this camera' : ''}. This cannot be undone.`,
+    () => deletePaths(allItems.map(i => i.path))
+  );
+});
+
+// --- Show confirmation modal ---
+function showConfirm(title, msg, onConfirm) {
+  $('confirmTitle').textContent = title;
+  $('confirmMsg').textContent = msg;
+  pendingDeleteAction = onConfirm;
+  $('confirmModal').classList.add('active');
+}
+
+function closeConfirm() {
+  $('confirmModal').classList.remove('active');
+  pendingDeleteAction = null;
+}
+
+ $('confirmDeleteBtn').addEventListener('click', () => {
+  if (pendingDeleteAction) pendingDeleteAction();
+  closeConfirm();
+});
+
+// --- Batch delete ---
+async function deletePaths(paths) {
+  try {
+    showToast(`Deleting ${paths.length} clip${paths.length !== 1 ? 's' : ''}...`);
+    const res = await fetch('/api/footage/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: paths }),
+    });
+    const data = await res.json();
+
+    if (data.ok || data.deleted_count > 0) {
+      // Clear deleted items from selection
+      data.deleted.forEach(p => selectedPaths.delete(p));
+      showToast(`✅ Deleted ${data.deleted_count} clip${data.deleted_count !== 1 ? 's' : ''}`);
+
+      if (data.failed && data.failed.length > 0) {
+        showToast(`⚠️ ${data.failed.length} clip(s) failed to delete`);
+      }
+      // Reload footage
+      await loadFootage();
+    } else {
+      showToast('❌ Delete failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    showToast('❌ Delete failed: ' + e.message);
+  }
+}
+
+// --- Video player ---
+function playVideo(path) {
+  const player = $('player');
+  player.src = `/api/footage/stream?path=${encodeURIComponent(path)}`;
+  $('playerModal').classList.add('active');
+}
+
+function closePlayer() {
+  const player = $('player');
+  player.pause();
+  player.src = '';
+  $('playerModal').classList.remove('active');
+}
+
+ $('playerModal').addEventListener('click', (e) => {
+  if (e.target === $('playerModal')) closePlayer();
+});
+
+// --- Event listeners ---
+ $('camFilter').addEventListener('change', () => {
+  selectedPaths.clear();
+  loadFootage();
+});
+
+ $('refreshBtn').addEventListener('click', () => {
+  selectedPaths.clear();
+  loadFootage();
+});
+
+// --- Initial load ---
+loadFootage();
 </script>
 </body>
 </html>
