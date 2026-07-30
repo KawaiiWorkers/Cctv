@@ -1,265 +1,253 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Footage Library · CCTV</title>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>🎞 Footage • CCTV</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
-  :root{--bg:#0f172a;--card:#1e293b;--border:#334155;--accent:#6366f1;--text:#e2e8f0;--muted:#94a3b8}
-  body{background:var(--bg);color:var(--text);min-height:100vh}
-  header{position:sticky;top:0;background:rgba(15,23,42,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:.9rem 1.2rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.6rem;z-index:50}
-  .logo{font-size:1.15rem;font-weight:700}
-  nav{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
-  nav a,nav button{padding:.45rem .9rem;background:rgba(30,41,59,.6);border:1px solid var(--border);border-radius:8px;color:var(--text);text-decoration:none;font-size:.85rem;cursor:pointer}
-  nav a:hover,nav button:hover{border-color:var(--accent);background:rgba(99,102,241,.15)}
-  main{padding:1.2rem;max-width:1400px;margin:0 auto}
-  .toolbar{display:flex;gap:.6rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap}
-  .toolbar input,.toolbar select{background:rgba(15,23,42,.6);border:1px solid var(--border);color:var(--text);padding:.5rem .8rem;border-radius:8px;font-size:.85rem}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;cursor:pointer;transition:.2s}
-  .card:hover{border-color:var(--accent);transform:translateY(-2px)}
-  .thumb{aspect-ratio:16/9;background:#000;display:flex;align-items:center;justify-content:center;color:var(--muted);position:relative}
-  .thumb video{width:100%;height:100%;object-fit:cover}
-  .thumb .play{position:absolute;font-size:3rem;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.8);opacity:.85}
-  .badge{position:absolute;top:.5rem;left:.5rem;padding:.25rem .6rem;border-radius:6px;font-size:.7rem;font-weight:700;background:#6366f1;color:#fff}
-  .badge.scan{left:auto;right:.5rem;background:#f59e0b;color:#000;display:none}
-  .badge.scan.active{display:block}
-  .badge.scan.detected{background:#10b981;color:#000}
-  .meta{padding:.6rem .8rem;display:flex;justify-content:space-between;font-size:.8rem;gap:.5rem}
-  .meta .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .meta .time{color:var(--muted);flex-shrink:0}
-  .player-modal{position:fixed;inset:0;background:rgba(0,0,0,.95);display:none;z-index:100;flex-direction:column}
-  .player-modal.open{display:flex}
-  .player-bar{padding:.6rem 1rem;display:flex;justify-content:space-between;align-items:center;background:rgba(15,23,42,.8);color:#fff}
-  .player-bar button{background:rgba(239,68,68,.2);border:1px solid #ef4444;color:#fff;padding:.4rem .8rem;border-radius:6px;cursor:pointer}
-  .player-stage{flex:1;display:flex;align-items:center;justify-content:center;position:relative;padding:1rem}
-  .player-stage video{max-width:100%;max-height:100%;border-radius:8px}
-  .player-stage canvas{position:absolute;pointer-events:none;max-width:100%;max-height:100%}
-  .scan-btn{background:#f59e0b;color:#000;border:none;padding:.4rem .8rem;border-radius:6px;cursor:pointer;font-size:.8rem;font-weight:600}
-  .scan-btn:disabled{opacity:.5;cursor:wait}
-  .empty{text-align:center;padding:4rem 1rem;color:var(--muted)}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0b1220;color:#e6edf7;font-family:system-ui,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;padding:12px 18px;background:#0e1626;border-bottom:1px solid #1c2740;position:sticky;top:0;z-index:10}
+  header .brand{font-weight:700}
+  header .spacer{flex:1}
+  header a{color:#9db6e6;text-decoration:none;margin-left:16px;font-size:14px}
+  header a.active{color:#fff}
+  main{padding:18px;max-width:1400px;margin:0 auto;display:grid;grid-template-columns:320px 1fr;gap:16px}
+  @media(max-width:800px){ main{grid-template-columns:1fr} }
+  .side{background:#131b2e;border:1px solid #22304d;border-radius:14px;padding:12px;max-height:80vh;overflow:auto}
+  .side h3{margin:6px 0 12px;font-size:13px;letter-spacing:.3px;opacity:.75}
+  select{width:100%;padding:9px;border-radius:10px;background:#0e1626;color:#e6edf7;border:1px solid #2a3a5c;margin-bottom:10px}
+  .item{padding:10px;border-radius:10px;cursor:pointer;font-size:13px;border:1px solid transparent}
+  .item:hover{background:#1a2340}
+  .item.active{background:#1a2340;border-color:#4c8dff}
+  .item .n{font-weight:600}
+  .item .s{opacity:.55;font-size:11px;margin-top:2px}
+  .empty{opacity:.55;font-size:13px;padding:20px;text-align:center}
+  .player{background:#131b2e;border:1px solid #22304d;border-radius:14px;padding:12px}
+  .stage{background:#000;border-radius:10px;position:relative;overflow:hidden;aspect-ratio:16/9}
+  video, canvas.overlay{position:absolute;inset:0;width:100%;height:100%}
+  canvas.overlay{pointer-events:none}
+  .row{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+  button{background:#1b2440;color:#e6edf7;border:1px solid #2a3a5c;border-radius:10px;padding:8px 12px;font-weight:600;cursor:pointer}
+  button.primary{background:#4c8dff;border-color:#4c8dff;color:#fff}
+  button.danger{background:#7b1d1d;border-color:#7b1d1d;color:#fff}
+  .badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700}
+  .badge.human{background:#155e2c;color:#5cf29a}
+  .badge.none{background:#2a3a5c;color:#9db6e6}
+  .meta{font-size:12px;opacity:.7}
 </style>
 </head>
 <body>
-
 <header>
-  <div class="logo">🎬 Footage Library</div>
-  <nav>
-    <a href="/dashboard">Live</a>
-    <a href="/footage" style="background:rgba(99,102,241,.2);border-color:var(--accent)">Footage</a>
-    <a href="/logout">Logout</a>
-  </nav>
+  <div class="brand">🎞 Footage</div>
+  <div class="spacer"></div>
+  <a href="/dashboard">Dashboard</a>
+  <a href="/footage" class="active">Footage</a>
+  <a href="/logout">Logout</a>
 </header>
 
 <main>
-  <div class="toolbar">
-    <input type="text" id="search" placeholder="🔍 Search camera name…">
-    <select id="camFilter"><option value="">All cameras</option></select>
-    <button onclick="loadFootage()" style="background:rgba(99,102,241,.2);border:1px solid var(--accent);color:#fff;padding:.5rem .9rem;border-radius:8px;cursor:pointer">🔄 Refresh</button>
-  </div>
-  <div class="grid" id="grid"></div>
-  <div class="empty" id="empty">Loading footage…</div>
+  <aside class="side">
+    <h3>CAMERA</h3>
+    <select id="camSel"><option value="">All cameras</option></select>
+    <h3>CLIPS</h3>
+    <div id="list"></div>
+  </aside>
+
+  <section class="player">
+    <div class="stage" id="stage">
+      <video id="vid" controls playsinline preload="metadata"></video>
+      <canvas class="overlay" id="ov"></canvas>
+    </div>
+    <div class="row">
+      <div id="clipName" class="meta">Select a clip to play.</div>
+      <span class="spacer" style="flex:1"></span>
+      <span id="aiBadge" class="badge none">🧠 not scanned</span>
+      <button id="btnScan">🔍 Scan for humans</button>
+      <button id="btnDl" class="primary">⬇ Download</button>
+      <button id="btnDel" class="danger">🗑 Delete</button>
+    </div>
+    <div id="detStatus" class="meta" style="margin-top:8px"></div>
+  </section>
 </main>
 
-<div class="player-modal" id="playerModal">
-  <div class="player-bar">
-    <div id="playerTitle">Footage</div>
-    <div style="display:flex;gap:.5rem">
-      <button class="scan-btn" id="scanBtn">🧍 Scan for People</button>
-      <button onclick="closePlayer()">✕ Close</button>
-    </div>
-  </div>
-  <div class="player-stage" id="playerStage">
-    <video id="player" controls playsinline></video>
-    <canvas id="playerCanvas"></canvas>
-  </div>
-</div>
-
 <script>
-let footage = [];
-let model = null;
-let isMobileMode = localStorage.getItem("cctvMode") === "mobile";
+'use strict';
 
-async function ensureModel() {
-  if (model) return;
-  try {
-    model = await cocoSsd.load({base: "lite_mobilenet_v2"});
-  } catch (e) { console.warn("model load failed", e); }
+/* ============================================================
+ * State
+ * ============================================================ */
+let items = [];
+let current = null;   // { path, camera_id, name, ... }
+let signedUrl = null;
+let detector = null;
+let scanning = false;
+const MODE = localStorage.getItem('cctv_mode') || 'desktop';
+
+const $ = id => document.getElementById(id);
+
+/* ============================================================
+ * Load list + camera selector
+ * ============================================================ */
+async function loadCameras(){
+  const r = await fetch('/api/cameras'); const j = await r.json();
+  const sel = $('camSel');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All cameras</option>' +
+    (j.cameras||[]).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  sel.value = cur;
+}
+async function loadList(){
+  const cam = $('camSel').value;
+  const url = cam ? `/api/footage/list?camera_id=${encodeURIComponent(cam)}` : '/api/footage/list';
+  const r = await fetch(url); const j = await r.json();
+  items = j.items || [];
+  renderList();
+}
+function renderList(){
+  const box = $('list');
+  if (!items.length){ box.innerHTML = '<div class="empty">No clips yet.</div>'; return; }
+  box.innerHTML = items.map((it,i) => `
+    <div class="item" data-i="${i}">
+      <div class="n">${escapeHtml(it.name)}</div>
+      <div class="s">${it.camera_id} • ${fmtSize(it.size)} • ${fmtDate(it.created_at)}</div>
+    </div>
+  `).join('');
+  box.querySelectorAll('.item').forEach(el => el.onclick = () => selectItem(+el.dataset.i));
+}
+$('camSel').onchange = loadList;
+
+/* ============================================================
+ * Playback via secure backend stream
+ * ============================================================ */
+async function selectItem(i){
+  current = items[i];
+  document.querySelectorAll('.item').forEach((el,idx) => el.classList.toggle('active', idx===i));
+  $('clipName').textContent = current.name + '  •  ' + current.camera_id;
+  $('aiBadge').className = 'badge none'; $('aiBadge').textContent = '🧠 not scanned';
+  $('detStatus').textContent = '';
+  // Use secure /api/footage/stream (private bucket) — cookie-authenticated
+  const url = `/api/footage/stream?path=${encodeURIComponent(current.path)}`;
+  $('vid').src = url;
+  // Signed URL for optional download
+  const sr = await fetch(`/api/footage/signed?path=${encodeURIComponent(current.path)}`);
+  const sj = await sr.json(); signedUrl = sj.url || null;
+  // In Mobile Mode we auto-scan on view (per spec: shift AI to footage)
+  if (MODE === 'mobile') autoScanWhenReady();
 }
 
-async function loadFootage() {
-  try {
-    const res = await fetch("/api/footage/list");
-    if (!res.ok) { $("empty").textContent = "Error loading footage"; return; }
-    footage = await res.json();
-    renderGrid();
-    populateFilter();
-  } catch (e) {
-    $("empty").textContent = "Error: " + e.message;
-  }
+$('btnDl').onclick = () => {
+  if (!current) return;
+  const url = signedUrl || `/api/footage/stream?path=${encodeURIComponent(current.path)}`;
+  const a = document.createElement('a'); a.href = url; a.download = current.name; a.click();
+};
+
+$('btnDel').onclick = async () => {
+  if (!current) return;
+  if (!confirm('Delete '+current.name+' ?')) return;
+  await fetch('/api/footage/delete', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ path: current.path }) });
+  current = null; $('vid').removeAttribute('src'); $('vid').load();
+  await loadList();
+};
+
+/* ============================================================
+ * On-demand human detection (coco-ssd, main thread — clip playback is short)
+ * ============================================================ */
+async function ensureDetector(){
+  if (detector) return detector;
+  $('detStatus').textContent = 'Loading detector…';
+  await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js');
+  await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js');
+  await tf.setBackend('webgl'); await tf.ready();
+  detector = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+  $('detStatus').textContent = 'Detector ready.';
+  return detector;
 }
-
-function populateFilter() {
-  const select = $("camFilter");
-  const cams = [...new Set(footage.map(f => f.camera_name || "Unknown"))];
-  select.innerHTML = '<option value="">All cameras</option>' +
-    cams.map(c => `<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join("");
-}
-
-function escapeHtml(s){return (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));}
-function escapeAttr(s){return escapeHtml(s);}
-
-function formatTime(iso) {
-  if (!iso) return "";
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString();
-  } catch { return iso; }
-}
-function formatSize(b) {
-  if (!b) return "—";
-  if (b < 1024) return b + " B";
-  if (b < 1024*1024) return (b/1024).toFixed(1) + " KB";
-  return (b/1024/1024).toFixed(2) + " MB";
-}
-
-function renderGrid() {
-  const grid = $("grid");
-  const search = $("search").value.toLowerCase();
-  const camFilter = $("camFilter").value;
-  grid.innerHTML = "";
-  const filtered = footage.filter(f =>
-    (!search || (f.camera_name||"").toLowerCase().includes(search)) &&
-    (!camFilter || f.camera_name === camFilter)
-  );
-
-  $("empty").style.display = filtered.length ? "none" : "block";
-  if (!filtered.length) $("empty").textContent = "No footage found";
-
-  filtered.forEach(f => {
-    const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML = `
-      <div class="thumb">
-        <span class="badge">${formatSize(f.size_bytes)}</span>
-        <span class="badge scan">🧍</span>
-        <div class="play">▶</div>
-      </div>
-      <div class="meta">
-        <span class="name">${escapeHtml(f.camera_name || "Unknown")}</span>
-        <span class="time">${formatTime(f.created_at)}</span>
-      </div>
-    `;
-    card.addEventListener("click", () => openPlayer(f));
-    grid.appendChild(card);
+function loadScript(src){
+  return new Promise((res, rej) => {
+    if ([...document.scripts].some(s=>s.src===src)) return res();
+    const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
   });
 }
 
- $("search").addEventListener("input", renderGrid);
- $("camFilter").addEventListener("change", renderGrid);
-
-// ─────────────────────────────────────────────────────────────────
-// Player + on-demand human detection scanning
-// ─────────────────────────────────────────────────────────────────
-let currentFootage = null;
-let scanLoopActive = false;
-
-async function openPlayer(f) {
-  currentFootage = f;
-  $("playerTitle").textContent = `${f.camera_name || "Unknown"} · ${formatTime(f.created_at)}`;
-  const video = $("player");
-  const canvas = $("playerCanvas");
-  canvas.width = 0; canvas.height = 0;
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  if (!f.signed_url) {
-    alert("Signed URL expired. Please refresh.");
-    return;
-  }
-  video.src = f.signed_url;
-  $("playerModal").classList.add("open");
-  video.play().catch(()=>{});
-  // Reset scan button
-  const btn = $("scanBtn");
-  btn.disabled = false;
-  btn.textContent = "🧍 Scan for People";
-  btn.onclick = () => toggleScan();
+async function autoScanWhenReady(){
+  const v = $('vid');
+  if (!v.readyState) v.onloadeddata = () => scanClip();
+  else scanClip();
 }
 
-function closePlayer() {
-  $("playerModal").classList.remove("open");
-  const video = $("player");
-  video.pause();
-  video.src = "";
-  scanLoopActive = false;
-}
+$('btnScan').onclick = () => scanClip();
 
-async function toggleScan() {
-  const btn = $("scanBtn");
-  if (scanLoopActive) {
-    scanLoopActive = false;
-    btn.textContent = "🧍 Scan for People";
-    btn.disabled = false;
-    const canvas = $("playerCanvas");
-    canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height);
-    return;
-  }
-  btn.disabled = true;
-  btn.textContent = "Loading model…";
-  await ensureModel();
-  btn.disabled = false;
-  btn.textContent = "⏹ Stop Scan";
-  scanLoopActive = true;
-  runScan();
-}
-
-async function runScan() {
-  const video = $("player");
-  const canvas = $("playerCanvas");
-  const ctx = canvas.getContext("2d");
-  let peopleDetected = false;
-
-  const tick = async () => {
-    if (!scanLoopActive) return;
-    if (video.videoWidth && !video.paused && !video.ended) {
-      try {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        // Match canvas display size to video element
-        canvas.style.width = video.clientWidth + "px";
-        canvas.style.height = video.clientHeight + "px";
-        const preds = await model.detect(video, 20);
-        const people = preds.filter(p => p.class === "person");
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.lineWidth = 4;
-        ctx.strokeStyle = "#22d3ee";
-        ctx.font = "bold 24px Arial";
-        ctx.fillStyle = "#22d3ee";
-        people.forEach(p => {
-          const [x, y, w, h] = p.bbox;
-          ctx.strokeRect(x, y, w, h);
-          ctx.fillText(`person ${Math.round(p.score*100)}%`, x, Math.max(20, y - 6));
-        });
-        if (people.length > 0) peopleDetected = true;
-      } catch (e) { /* skip frame */ }
+async function scanClip(){
+  if (!current || scanning) return;
+  scanning = true;
+  const v = $('vid'), ov = $('ov'), ctx = ov.getContext('2d');
+  try{
+    await ensureDetector();
+    ov.width = v.videoWidth || 640; ov.height = v.videoHeight || 360;
+    // Sample up to 6 frames spread over the clip
+    const samples = 6;
+    const dur = v.duration && isFinite(v.duration) ? v.duration : 15;
+    let anyHuman = false, total = 0;
+    for (let i=0; i<samples; i++){
+      const t = (i + 0.5) * (dur / samples);
+      await seekTo(v, t);
+      const preds = await detector.detect(v, 5, 0.5);
+      ctx.clearRect(0,0,ov.width, ov.height);
+      ctx.lineWidth = 3; ctx.strokeStyle = '#5cf29a'; ctx.fillStyle = '#5cf29a'; ctx.font = 'bold 18px system-ui';
+      for (const p of preds){
+        if (p.class === 'person'){ anyHuman = true; total++; }
+        const [x,y,w,h] = p.bbox;
+        ctx.strokeRect(x,y,w,h);
+        const lbl = `${p.class} ${(p.score*100|0)}%`;
+        const tw = ctx.measureText(lbl).width + 10;
+        ctx.fillRect(x, y-22, tw, 22);
+        ctx.fillStyle = '#0b1220'; ctx.fillText(lbl, x+5, y-6);
+        ctx.fillStyle = '#5cf29a';
+      }
+      $('detStatus').textContent = `Scanning… frame ${i+1}/${samples} at ${t.toFixed(1)}s`;
     }
-    requestAnimationFrame(tick);
-  };
-  tick();
+    if (anyHuman){
+      $('aiBadge').className = 'badge human';
+      $('aiBadge').textContent = `👤 human detected (${total})`;
+    } else {
+      $('aiBadge').className = 'badge none';
+      $('aiBadge').textContent = '✓ no humans found';
+    }
+    $('detStatus').textContent = 'Scan complete.';
+    // Rewind for viewing
+    v.currentTime = 0;
+  } catch(e){
+    $('detStatus').textContent = 'Scan failed: '+e.message;
+  } finally {
+    scanning = false;
+  }
+}
+function seekTo(v, t){
+  return new Promise(res => {
+    const on = () => { v.removeEventListener('seeked', on); res(); };
+    v.addEventListener('seeked', on);
+    try{ v.currentTime = Math.min(t, (v.duration||t)-0.05); }catch{ res(); }
+  });
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Boot
-// ─────────────────────────────────────────────────────────────────
-loadFootage();
-// Preload model in background on desktop
-if (!isMobileMode) ensureModel();
+/* ============================================================
+ * Utils
+ * ============================================================ */
+function fmtSize(b){ if (!b) return '—'; const u=['B','KB','MB','GB']; let i=0; while(b>=1024 && i<3){ b/=1024; i++; } return b.toFixed(1)+' '+u[i]; }
+function fmtDate(s){ if (!s) return ''; try{ return new Date(s).toLocaleString(); }catch{ return s; } }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-document.addEventListener("keydown", e => { if (e.key === "Escape") closePlayer(); });
+/* ============================================================
+ * Boot
+ * ============================================================ */
+(async () => {
+  await loadCameras();
+  await loadList();
+  setInterval(loadList, 15000);
+})();
 </script>
 </body>
 </html>
