@@ -3,6 +3,7 @@ Real-time CCTV & Surveillance Web Application
 Flask + WebRTC signaling + Supabase private storage
 """
 import os
+import json
 import time
 import uuid
 import threading
@@ -51,7 +52,53 @@ app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024   # 50 MB per chunk upload
 _state_lock = threading.RLock()
 
 # camera_id -> {"name": str, "last_ping": float, "registered": float}
+# NOTE: this is only a fast local cache. The source of truth is a JSON file
+# in the Supabase bucket (REGISTRY_PATH), so the registry survives process
+# restarts and is shared across every gunicorn worker / dyno instead of
+# living in one process's private memory.
 cameras: dict[str, dict] = {}
+REGISTRY_PATH      = "_registry/cameras.json"
+_registry_synced   = 0.0
+REGISTRY_CACHE_TTL = 3   # seconds before we re-read the registry from Supabase
+
+
+def _load_registry(force: bool = False):
+    """Refresh the in-memory `cameras` cache from the Supabase-backed registry."""
+    global _registry_synced
+    if supabase is None:
+        return cameras
+    if not force and (_now() - _registry_synced) < REGISTRY_CACHE_TTL:
+        return cameras
+    try:
+        blob = supabase.storage.from_(SUPABASE_BUCKET).download(REGISTRY_PATH)
+        data = json.loads(blob.decode("utf-8"))
+        with _state_lock:
+            cameras.clear()
+            cameras.update(data)
+            _registry_synced = _now()
+    except Exception:
+        # registry file doesn't exist yet (first run) or a transient error;
+        # don't wipe out whatever we already have cached locally.
+        _registry_synced = _now()
+    return cameras
+
+
+def _save_registry():
+    """Persist the current `cameras` cache back to the Supabase-backed registry."""
+    global _registry_synced
+    if supabase is None:
+        return
+    try:
+        with _state_lock:
+            payload = json.dumps(cameras).encode("utf-8")
+        supabase.storage.from_(SUPABASE_BUCKET).upload(
+            path=REGISTRY_PATH,
+            file=payload,
+            file_options={"content-type": "application/json", "upsert": "true"},
+        )
+        _registry_synced = _now()
+    except Exception as e:
+        print(f"[WARN] camera registry save failed: {e}")
 
 # camera_id -> list of pending offers from admin  (admin -> camera)
 # each item: {"sdp": str, "type": "offer", "session": str, "ts": float}
@@ -181,6 +228,7 @@ def footage_page():
 @app.route("/api/camera/register", methods=["POST"])
 def camera_register():
     data = request.get_json(silent=True) or {}
+    _load_registry()
     cam_id = (data.get("camera_id") or "").strip() or f"cam-{uuid.uuid4().hex[:8]}"
     name   = (data.get("name") or f"Camera-{cam_id[-4:]}").strip()
     with _state_lock:
@@ -190,6 +238,7 @@ def camera_register():
             "registered": _now(),
         }
         pending_offers.setdefault(cam_id, [])
+    _save_registry()
     return jsonify({"camera_id": cam_id, "name": name})
 
 
@@ -199,18 +248,21 @@ def camera_ping():
     cam_id = data.get("camera_id")
     if not cam_id:
         return jsonify({"error": "camera_id required"}), 400
+    _load_registry()
     with _state_lock:
         if cam_id not in cameras:
             return jsonify({"error": "unknown camera"}), 404
         cameras[cam_id]["last_ping"] = _now()
         offers = pending_offers.get(cam_id, [])
         pending_offers[cam_id] = []
+    _save_registry()
     return jsonify({"ok": True, "pending_offers": offers})
 
 
 @app.route("/api/cameras")
 @login_required
 def list_cameras():
+    _load_registry(force=True)
     now = _now()
     out = []
     with _state_lock:
@@ -347,9 +399,14 @@ def footage_upload():
         return jsonify({"error": f"upload failed: {e}"}), 500
 
     # touch heartbeat while we're at it
+    _load_registry()
+    touched = False
     with _state_lock:
         if cam_id in cameras:
             cameras[cam_id]["last_ping"] = _now()
+            touched = True
+    if touched:
+        _save_registry()
 
     return jsonify({"ok": True, "path": key, "bytes": len(data)})
 
@@ -363,9 +420,17 @@ def footage_list():
     try:
         # list top-level (camera folders) or a specific camera folder
         if not cam:
-            # aggregate: list every registered camera folder
-            with _state_lock:
-                cam_ids = list(cameras.keys())
+            # aggregate: list every camera folder that actually exists in the
+            # bucket (folders come back with id == None), rather than relying
+            # on the camera registry — this way clips always show up even if
+            # a camera was never (re-)registered or the registry lagged.
+            root = supabase.storage.from_(SUPABASE_BUCKET).list(
+                path="", options={"limit": 1000}
+            )
+            cam_ids = [
+                it["name"] for it in (root or [])
+                if it.get("id") is None and not it.get("name", "").startswith(("_", "."))
+            ]
             items = []
             for c in cam_ids:
                 try:
