@@ -1,360 +1,403 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>📹 CCTV Camera Node</title>
-<style>
-  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  html,body{margin:0;height:100%;background:#000;color:#e6edf7;font-family:system-ui,Segoe UI,Roboto,sans-serif;overflow:hidden}
-  #stage{position:fixed;inset:0;display:flex;flex-direction:column}
-  video{flex:1;width:100%;height:100%;object-fit:cover;background:#000}
-  .topbar{position:absolute;top:0;left:0;right:0;padding:10px 14px;
-    background:linear-gradient(180deg,rgba(0,0,0,.75),rgba(0,0,0,0));
-    display:flex;align-items:center;gap:10px;z-index:5}
-  .dot{width:10px;height:10px;border-radius:50%;background:#666;box-shadow:0 0 8px rgba(0,0,0,.6)}
-  .dot.rec{background:#ff3b3b;animation:pulse 1.2s infinite}
-  .dot.live{background:#25d366}
-  @keyframes pulse{50%{opacity:.35}}
-  .name{font-weight:600;font-size:14px;letter-spacing:.3px}
-  .meta{margin-left:auto;font-size:11px;opacity:.75;text-align:right;line-height:1.35}
-  .bottom{position:absolute;bottom:0;left:0;right:0;padding:14px;
-    background:linear-gradient(0deg,rgba(0,0,0,.85),rgba(0,0,0,0));z-index:5}
-  .row{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap}
-  button{background:#1b2440;color:#e6edf7;border:1px solid #2a3a5c;border-radius:12px;
-    padding:12px 16px;font-size:14px;font-weight:600}
-  button.primary{background:#4c8dff;border-color:#4c8dff;color:#fff}
-  button.stop{background:#c0392b;border-color:#c0392b;color:#fff}
-  input{background:#0e1626;border:1px solid #2a3a5c;color:#e6edf7;border-radius:10px;padding:10px 12px;font-size:14px;width:200px;max-width:70vw}
-  #log{position:absolute;left:10px;bottom:80px;max-height:22vh;overflow:auto;
-    background:rgba(0,0,0,.55);padding:8px 10px;border-radius:8px;font-size:11px;
-    font-family:ui-monospace,Menlo,Consolas,monospace;line-height:1.35;max-width:80vw;z-index:4;display:none}
-  .setup{position:absolute;inset:0;background:rgba(6,10,20,.94);display:flex;
-    align-items:center;justify-content:center;padding:20px;z-index:10}
-  .setup .card{background:#131b2e;border:1px solid #22304d;border-radius:16px;padding:22px;max-width:380px;width:100%}
-  .setup h1{margin:0 0 6px;font-size:18px}
-  .setup p{margin:0 0 14px;opacity:.65;font-size:13px}
-  .setup label{font-size:12px;opacity:.75;display:block;margin:10px 0 4px}
-  .setup input{width:100%}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Camera • CCTV</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,-apple-system,sans-serif;background:#0b1220;color:#e6edf7;
+         display:flex;flex-direction:column;align-items:center;min-height:100vh;padding:16px}
+    .header{width:100%;max-width:600px;text-align:center;margin-bottom:16px}
+    .header h1{font-size:20px;margin-bottom:4px}
+    .header .sub{opacity:.6;font-size:13px}
+    .video-wrap{position:relative;width:100%;max-width:600px;border-radius:14px;overflow:hidden;
+                background:#000;aspect-ratio:16/9;border:1px solid #22304d}
+    video{width:100%;height:100%;object-fit:cover}
+    .badge{position:absolute;top:10px;left:10px;background:rgba(0,0,0,.65);padding:4px 10px;
+           border-radius:8px;font-size:12px;display:flex;align-items:center;gap:6px}
+    .dot{width:8px;height:8px;border-radius:50%;background:#ff4444;animation:pulse 1.5s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    .status{width:100%;max-width:600px;margin-top:14px;padding:12px 16px;background:#131b2e;
+            border:1px solid #22304d;border-radius:10px;font-size:13px}
+    .status .row{display:flex;justify-content:space-between;padding:3px 0}
+    .status .label{opacity:.6}
+    .status .val{font-weight:600}
+    .online{color:#4ade80}.offline{color:#ff7676}
+    .controls{width:100%;max-width:600px;margin-top:14px;display:flex;gap:10px}
+    button{flex:1;padding:12px;border:0;border-radius:10px;font-size:14px;font-weight:600;
+           cursor:pointer;transition:.15s}
+    .btn-start{background:#4c8dff;color:#fff}
+    .btn-stop{background:#ff4444;color:#fff}
+    .btn-rec-toggle{background:#22304d;color:#e6edf7;border:1px solid #2a3a5c}
+    button:active{transform:scale(.97)}
+    .hidden{display:none}
+    .error{width:100%;max-width:600px;margin-top:10px;padding:10px 14px;background:#2a1517;
+           border:1px solid #ff4444;border-radius:8px;font-size:13px;color:#ff7676}
+  </style>
 </head>
 <body>
-<div id="stage">
-  <video id="preview" autoplay muted playsinline></video>
-
-  <div class="topbar">
-    <div class="dot" id="statusDot"></div>
-    <div class="name" id="camName">Camera</div>
-    <div class="meta">
-      <div id="resTxt">— × —</div>
-      <div id="chunkTxt">chunk 00:00 / 00:15</div>
-    </div>
+  <div class="header">
+    <h1>🎥 Camera Sensor</h1>
+    <div class="sub">This device streams live video to the CCTV dashboard</div>
   </div>
 
-  <pre id="log"></pre>
-
-  <div class="bottom">
-    <div class="row">
-      <button id="btnStart" class="primary">▶ Start Streaming</button>
-      <button id="btnStop"  class="stop"  style="display:none">■ Stop</button>
-      <button id="btnFlip">🔄 Flip</button>
-      <button id="btnLog">📝 Log</button>
-    </div>
+  <div class="video-wrap">
+    <video id="preview" autoplay muted playsinline></video>
+    <div class="badge hidden" id="recBadge"><span class="dot"></span> REC</div>
   </div>
 
-  <div class="setup" id="setup" style="display:none">
-    <div class="card">
-      <h1>📹 Register this device</h1>
-      <p>Give this phone a name (e.g. <em>Front Door</em>). It will appear in your admin dashboard.</p>
-      <label>Camera name</label>
-      <input id="inpName" placeholder="Front Door" value="">
-      <label>Camera ID (leave blank for auto)</label>
-      <input id="inpId" placeholder="auto">
-      <div style="margin-top:16px">
-        <button class="primary" id="btnRegister" style="width:100%">Continue →</button>
-      </div>
-    </div>
+  <div class="status">
+    <div class="row"><span class="label">Camera ID</span><span class="val" id="camId">—</span></div>
+    <div class="row"><span class="label">Name</span><span class="val" id="camName">—</span></div>
+    <div class="row"><span class="label">Status</span><span class="val offline" id="camStatus">Not started</span></div>
+    <div class="row"><span class="label">Auto-record</span><span class="val" id="recStatus">OFF</span></div>
+    <div class="row"><span class="label">Viewers</span><span class="val" id="viewerCount">0</span></div>
   </div>
-</div>
+
+  <div class="controls">
+    <button class="btn-start" id="startBtn">Start Camera</button>
+    <button class="btn-stop hidden" id="stopBtn">Stop</button>
+    <button class="btn-rec-toggle" id="recToggleBtn">Auto-Record: OFF</button>
+  </div>
+
+  <div class="error hidden" id="errBox"></div>
 
 <script>
-'use strict';
+// ═══════════════════════════════════════════════════════════════════════
+//  CRITICAL FIX: Use RELATIVE URLs for ALL API calls.
+//  This ensures requests go to the server that served this page,
+//  regardless of which device (phone/tablet/desktop) opens this page.
+//  Previously, hardcoded "http://localhost:5000" broke when a different
+//  device accessed this page, because localhost pointed to the phone
+//  itself instead of the actual server.
+// ═══════════════════════════════════════════════════════════════════════
 
-/* ============================================================
- * Configuration
- * ============================================================ */
-const CHUNK_MINUTES     = 0.25;                       // 15 seconds
-const CHUNK_MS          = Math.round(CHUNK_MINUTES * 60 * 1000);
-const TARGET_WIDTH      = 1920;
-const TARGET_HEIGHT     = 1080;
-const VIDEO_BITS_PER_S  = 2_500_000;                  // 2.5 Mbps
-const PING_INTERVAL_MS  = 4000;
-const ICE_SERVERS       = [{ urls: 'stun:stun.l.google.com:19302' }];
+const API = '';  // empty string = relative URLs → always correct host
 
-/* ============================================================
- * State
- * ============================================================ */
-let camId       = localStorage.getItem('cctv_cam_id')   || '';
-let camName     = localStorage.getItem('cctv_cam_name') || '';
-let stream      = null;
-let recorder    = null;
-let facing      = 'environment';
-let chunkStart  = 0;
+// --- State ---
+let cameraId   = localStorage.getItem('cctv_camera_id') || '';
+let cameraName = localStorage.getItem('cctv_camera_name') || '';
+let localStream = null;
 let pingTimer   = null;
-let chunkTimer  = null;
-const peers     = new Map();   // session -> RTCPeerConnection
+let recTimer    = null;
+let mediaRecorder = null;
+let autoRecord  = false;
+let peerConnections = new Map();  // session_id -> RTCPeerConnection
+let iceServers  = [{ urls: 'stun:stun.l.google.com:19302' }];
+let viewerCount = 0;
 
-/* ============================================================
- * Utility
- * ============================================================ */
+// --- DOM ---
 const $ = id => document.getElementById(id);
-const logEl = $('log');
-function log(...a){
-  const line = a.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' ');
-  console.log('[cam]', line);
-  logEl.textContent = (logEl.textContent + '\n' + line).split('\n').slice(-40).join('\n');
+const video = $('preview');
+const startBtn = $('startBtn');
+const stopBtn  = $('stopBtn');
+const recToggleBtn = $('recToggleBtn');
+const errBox  = $('errBox');
+
+function showError(msg) {
+  errBox.textContent = msg;
+  errBox.classList.remove('hidden');
+  setTimeout(() => errBox.classList.add('hidden'), 5000);
 }
 
-function fmtClock(ms){
-  const s = Math.max(0, Math.floor(ms/1000));
-  return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+function setStatus(text, online) {
+  const el = $('camStatus');
+  el.textContent = text;
+  el.className = 'val ' + (online ? 'online' : 'offline');
 }
 
-async function jpost(url, body, isForm=false){
-  const opts = { method:'POST' };
-  if (isForm) opts.body = body;
-  else { opts.headers = {'Content-Type':'application/json'}; opts.body = JSON.stringify(body); }
-  const r = await fetch(url, opts);
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
+// --- Fetch ICE server config ---
+async function loadConfig() {
+  try {
+    const res = await fetch(`${API}/api/config`);
+    const data = await res.json();
+    if (data.iceServers) iceServers = data.iceServers;
+  } catch (e) { /* use defaults */ }
 }
 
-/* ============================================================
- * Setup / registration
- * ============================================================ */
-$('btnLog').onclick = () => { logEl.style.display = logEl.style.display==='block' ? 'none':'block'; };
-
-function showSetup(show){ $('setup').style.display = show ? 'flex' : 'none'; }
-
-async function ensureRegistered(){
-  if (camId && camName){
-    $('camName').textContent = camName;
-    return;
+// --- Register camera ---
+async function registerCamera() {
+  // Use a user-friendly name based on device info
+  if (!cameraName) {
+    const ua = navigator.userAgent;
+    let platform = 'Device';
+    if (/iPhone|iPad|iPod/.test(ua)) platform = 'iOS';
+    else if (/Android/.test(ua)) platform = 'Android';
+    else if (/Windows/.test(ua)) platform = 'Windows';
+    else if (/Mac/.test(ua)) platform = 'Mac';
+    cameraName = `${platform}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
   }
-  showSetup(true);
-  await new Promise(res => {
-    $('btnRegister').onclick = async () => {
-      const nm = ($('inpName').value || '').trim() || `Camera-${Math.floor(Math.random()*9000+1000)}`;
-      const id = ($('inpId').value || '').trim();
-      try {
-        const r = await jpost('/api/camera/register', { camera_id: id, name: nm });
-        camId = r.camera_id; camName = r.name;
-        localStorage.setItem('cctv_cam_id', camId);
-        localStorage.setItem('cctv_cam_name', camName);
-        $('camName').textContent = camName;
-        showSetup(false);
-        res();
-      } catch(e){ alert('Registration failed: '+e.message); }
-    };
+
+  const res = await fetch(`${API}/api/camera/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ camera_id: cameraId || undefined, name: cameraName }),
   });
+  if (!res.ok) throw new Error(`Register failed: ${res.status}`);
+  const data = await res.json();
+  cameraId   = data.camera_id;
+  cameraName = data.name;
+  localStorage.setItem('cctv_camera_id', cameraId);
+  localStorage.setItem('cctv_camera_name', cameraName);
+  $('camId').textContent = cameraId;
+  $('camName').textContent = cameraName;
+  setStatus('Online', true);
 }
 
-/* ============================================================
- * Media capture
- * ============================================================ */
-async function startStream(){
-  try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: {
-        facingMode: { ideal: facing },
-        width:  { ideal: TARGET_WIDTH  },
-        height: { ideal: TARGET_HEIGHT },
-        frameRate: { ideal: 30, max: 30 }
-      }
+// --- Heartbeat + offer polling ---
+async function ping() {
+  try {
+    const res = await fetch(`${API}/api/camera/ping`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_id: cameraId }),
     });
-    $('preview').srcObject = stream;
-    const t = stream.getVideoTracks()[0];
-    const s = t.getSettings();
-    $('resTxt').textContent = `${s.width||'?'} × ${s.height||'?'}`;
-    log('camera ready', s.width, s.height, s.frameRate);
-    return true;
-  } catch(e){
-    log('getUserMedia failed:', e.message);
-    alert('Camera access denied or unavailable: '+e.message);
-    return false;
+    if (res.status === 404) {
+      // Registry lost us (server restart) — re-register
+      await registerCamera();
+      return;
+    }
+    if (!res.ok) return;
+    const data = await res.json();
+    // Process any pending WebRTC offers from admin dashboard
+    if (data.pending_offers && data.pending_offers.length > 0) {
+      for (const offer of data.pending_offers) {
+        handleOffer(offer);
+      }
+    }
+  } catch (e) {
+    console.warn('Ping failed:', e);
   }
 }
 
-function stopStream(){
-  if (recorder && recorder.state !== 'inactive'){ try{recorder.stop();}catch{} }
-  recorder = null;
-  if (stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
-  peers.forEach(pc=>pc.close()); peers.clear();
-  clearInterval(pingTimer); clearInterval(chunkTimer);
-  pingTimer = chunkTimer = null;
-  $('statusDot').className = 'dot';
-  $('btnStart').style.display = ''; $('btnStop').style.display = 'none';
-  log('stopped');
-}
+// --- WebRTC: handle offer from admin ---
+async function handleOffer(offer) {
+  const sessionId = offer.session;
+  if (peerConnections.has(sessionId)) return;  // already handling
 
-/* ============================================================
- * Recording — short chunk loop
- * ============================================================ */
-function pickMime(){
-  const cands = [
-    'video/webm;codecs=vp9,opus',
-    'video/webm;codecs=vp8,opus',
-    'video/webm;codecs=h264,opus',
-    'video/webm',
-    'video/mp4'
-  ];
-  for (const m of cands) if (MediaRecorder.isTypeSupported(m)) return m;
-  return '';
-}
+  try {
+    const pc = new RTCPeerConnection({ iceServers });
+    peerConnections.set(sessionId, pc);
+    viewerCount++;
+    $('viewerCount').textContent = viewerCount;
 
-function startChunkLoop(){
-  const mimeType = pickMime();
-  log('recording mime:', mimeType || '(default)');
-
-  function startOne(){
-    if (!stream) return;
-    try{
-      recorder = new MediaRecorder(stream, {
-        mimeType: mimeType || undefined,
-        videoBitsPerSecond: VIDEO_BITS_PER_S
-      });
-    } catch(e){
-      log('MediaRecorder failed, fallback default:', e.message);
-      recorder = new MediaRecorder(stream);
+    // Add local tracks to peer connection
+    if (localStream) {
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
     }
-    const parts = [];
-    recorder.ondataavailable = ev => { if (ev.data && ev.data.size) parts.push(ev.data); };
-    recorder.onstop = async () => {
-      const blob = new Blob(parts, { type: recorder.mimeType || 'video/webm' });
-      if (blob.size > 1000) uploadChunk(blob);
-      // Immediately spin the next chunk to keep continuity
-      if (stream) startOne();
+
+    // Set remote description (the offer from admin)
+    await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
+
+    // Create and set local description (answer)
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    // Send answer back to admin
+    await fetch(`${API}/api/webrtc/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: sessionId, sdp: answer.sdp }),
+    });
+
+    // Send ICE candidates to admin
+    pc.onicecandidate = async (event) => {
+      if (event.candidate) {
+        await fetch(`${API}/api/webrtc/ice`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session: sessionId,
+            candidate: event.candidate,
+            to: 'admin',
+          }),
+        });
+      }
     };
-    chunkStart = Date.now();
-    recorder.start();
-    $('statusDot').className = 'dot rec';
-    // Hard stop after CHUNK_MS to close the container cleanly
-    setTimeout(()=>{ try{ recorder && recorder.state!=='inactive' && recorder.stop(); }catch{} }, CHUNK_MS);
-  }
 
-  startOne();
-
-  // UI ticker
-  chunkTimer = setInterval(()=>{
-    const el = Date.now() - chunkStart;
-    $('chunkTxt').textContent = `chunk ${fmtClock(el)} / ${fmtClock(CHUNK_MS)}`;
-  }, 500);
-}
-
-async function uploadChunk(blob){
-  try{
-    const fd = new FormData();
-    fd.append('camera_id', camId);
-    fd.append('file', blob, `clip-${Date.now()}.webm`);
-    const r = await fetch('/api/footage/upload', { method:'POST', body: fd });
-    if (!r.ok) throw new Error(await r.text());
-    const j = await r.json();
-    log('uploaded', (j.bytes/1024|0)+'KB', j.path);
-  } catch(e){
-    log('upload failed', e.message);
-  }
-}
-
-/* ============================================================
- * Heartbeat + WebRTC signaling poll
- * ============================================================ */
-function startHeartbeat(){
-  pingTimer = setInterval(async ()=>{
-    try{
-      const r = await jpost('/api/camera/ping', { camera_id: camId });
-      if (r.pending_offers && r.pending_offers.length){
-        for (const off of r.pending_offers) handleOffer(off);
+    // Poll for ICE candidates from admin
+    const icePoll = setInterval(async () => {
+      if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+        clearInterval(icePoll);
+        peerConnections.delete(sessionId);
+        viewerCount--;
+        $('viewerCount').textContent = viewerCount;
+        return;
       }
-    } catch(e){ /* transient */ }
-  }, PING_INTERVAL_MS);
-}
-
-async function handleOffer(off){
-  log('offer received, session', off.session);
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-  peers.set(off.session, pc);
-
-  // Add local tracks (camera → admin)
-  stream.getTracks().forEach(t => pc.addTrack(t, stream));
-
-  pc.onicecandidate = ev => {
-    if (ev.candidate){
-      fetch('/api/webrtc/ice', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ session: off.session, to: 'admin', candidate: ev.candidate })
-      }).catch(()=>{});
-    }
-  };
-  pc.onconnectionstatechange = () => {
-    log('pc', off.session.slice(0,6), pc.connectionState);
-    if (['failed','closed','disconnected'].includes(pc.connectionState)){
-      pc.close(); peers.delete(off.session);
-    }
-  };
-
-  await pc.setRemoteDescription({ type:'offer', sdp: off.sdp });
-  const ans = await pc.createAnswer();
-  await pc.setLocalDescription(ans);
-  await jpost('/api/webrtc/answer', { session: off.session, sdp: ans.sdp });
-
-  // ICE puller for this session
-  (async function pull(){
-    while (peers.has(off.session)){
-      try{
-        const r = await fetch('/api/webrtc/ice?to=camera&session='+encodeURIComponent(off.session));
-        const j = await r.json();
-        for (const c of (j.candidates||[])){
-          try{ await pc.addIceCandidate(c); }catch(e){}
+      try {
+        const res = await fetch(`${API}/api/webrtc/ice?session=${sessionId}&to=camera`);
+        const data = await res.json();
+        if (data.candidates && data.candidates.length > 0) {
+          for (const c of data.candidates) {
+            await pc.addIceCandidate(c);
+          }
         }
-      }catch{}
-      await new Promise(r=>setTimeout(r, 1200));
-    }
-  })();
+      } catch (e) { /* ignore */ }
+    }, 1000);
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'closed' || pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        clearInterval(icePoll);
+        peerConnections.delete(sessionId);
+        viewerCount = Math.max(0, viewerCount - 1);
+        $('viewerCount').textContent = viewerCount;
+      }
+    };
+  } catch (e) {
+    console.error('Offer handling failed:', e);
+    peerConnections.delete(sessionId);
+  }
 }
 
-/* ============================================================
- * Bootstrap
- * ============================================================ */
-$('btnStart').onclick = async () => {
-  await ensureRegistered();
-  const ok = await startStream();
-  if (!ok) return;
-  $('btnStart').style.display = 'none';
-  $('btnStop').style.display  = '';
-  $('statusDot').className    = 'dot live';
-  startChunkLoop();
-  startHeartbeat();
-  // keep screen awake if supported
-  if ('wakeLock' in navigator){ try{ await navigator.wakeLock.request('screen'); }catch{} }
-};
+// --- Auto recording: record clips and upload periodically ---
+const CLIP_DURATION = 30000;  // 30 seconds per clip
 
-$('btnStop').onclick  = () => stopStream();
-$('btnFlip').onclick  = async () => {
-  facing = (facing === 'environment') ? 'user' : 'environment';
-  if (stream){
-    stream.getTracks().forEach(t=>t.stop());
-    await startStream();
-    // reconnect any live peers
-    peers.forEach(pc=>{
-      const sender = pc.getSenders().find(s=>s.track && s.track.kind==='video');
-      if (sender && stream) sender.replaceTrack(stream.getVideoTracks()[0]);
-    });
+function startRecording() {
+  if (!localStream || !autoRecord) return;
+
+  try {
+    const chunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9'
+      : 'video/webm';
+
+    mediaRecorder = new MediaRecorder(localStream, { mimeType, videoBitsPerSecond: 500000 });
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      if (blob.size > 1000) await uploadClip(blob);
+      // Start next clip if still recording
+      if (autoRecord && localStream) {
+        setTimeout(startRecording, 500);
+      }
+    };
+    mediaRecorder.start();
+    $('recBadge').classList.remove('hidden');
+  } catch (e) {
+    console.error('Recording failed:', e);
+    $('recBadge').classList.add('hidden');
   }
-};
+}
 
-// Attempt to hydrate name label from storage on load
-if (camName) $('camName').textContent = camName;
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  $('recBadge').classList.add('hidden');
+}
+
+async function uploadClip(blob) {
+  const formData = new FormData();
+  formData.append('camera_id', cameraId);
+  formData.append('file', blob, `clip-${Date.now()}.webm`);
+  try {
+    await fetch(`${API}/api/footage/upload`, { method: 'POST', body: formData });
+    console.log('[Footage] Clip uploaded');
+  } catch (e) {
+    console.error('[Footage] Upload failed:', e);
+  }
+}
+
+// --- Start camera ---
+async function startCamera() {
+  try {
+    startBtn.disabled = true;
+    startBtn.textContent = 'Starting...';
+
+    await loadConfig();
+
+    // Get camera access
+    localStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+    video.srcObject = localStream;
+
+    // Register with server
+    await registerCamera();
+
+    // Start heartbeat (every 5 seconds)
+    pingTimer = setInterval(ping, 5000);
+    // Immediate first ping
+    ping();
+
+    startBtn.classList.add('hidden');
+    stopBtn.classList.remove('hidden');
+    startBtn.disabled = false;
+    startBtn.textContent = 'Start Camera';
+
+    // Auto-start recording if enabled
+    if (autoRecord) startRecording();
+
+  } catch (e) {
+    showError(`Failed to start camera: ${e.message}`);
+    startBtn.disabled = false;
+    startBtn.textContent = 'Start Camera';
+  }
+}
+
+// --- Stop camera ---
+function stopCamera() {
+  if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+  stopRecording();
+
+  // Close all peer connections
+  peerConnections.forEach(pc => pc.close());
+  peerConnections.clear();
+  viewerCount = 0;
+  $('viewerCount').textContent = '0';
+
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop());
+    localStream = null;
+  }
+  video.srcObject = null;
+  setStatus('Stopped', false);
+
+  startBtn.classList.remove('hidden');
+  stopBtn.classList.add('hidden');
+}
+
+// --- Toggle auto-record ---
+recToggleBtn.addEventListener('click', () => {
+  autoRecord = !autoRecord;
+  recToggleBtn.textContent = `Auto-Record: ${autoRecord ? 'ON' : 'OFF'}`;
+  $('recStatus').textContent = autoRecord ? 'ON' : 'OFF';
+  if (autoRecord && localStream) {
+    startRecording();
+  } else if (!autoRecord) {
+    stopRecording();
+  }
+});
+
+startBtn.addEventListener('click', startCamera);
+stopBtn.addEventListener('click', stopCamera);
+
+// --- Cleanup on page unload ---
+window.addEventListener('beforeunload', () => {
+  if (pingTimer) clearInterval(pingTimer);
+  stopRecording();
+  if (localStream) localStream.getTracks().forEach(t => t.stop());
+  peerConnections.forEach(pc => pc.close());
+});
+
+// Keep screen on while camera is active
+let wakeLock = null;
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) { /* ignore */ }
+}
+document.addEventListener('visibilitychange', () => {
+  if (wakeLock !== null && document.visibilityState === 'visible' && localStream) {
+    requestWakeLock();
+  }
+});
 </script>
 </body>
 </html>
