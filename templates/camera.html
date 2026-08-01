@@ -90,6 +90,7 @@ let pingTimer = null;
 let webrtcPollTimer = null;
 let uptimeTimer = null;
 let currentChunkBytes = [];
+let pendingRemoteIce = [];
 
 // ─── DOM ───
 const $ = (sel) => document.querySelector(sel);
@@ -242,6 +243,7 @@ async function uploadChunk(blob) {
 // ─── WEBSOCKET-FREE WebRTC SIGNALING (Polling) ───
 async function initPeerConnection() {
   peerConnection = new RTCPeerConnection(STUN_SERVERS);
+  pendingRemoteIce = [];
   
   // Add local stream tracks
   mediaStream.getTracks().forEach(track => peerConnection.addTrack(track, mediaStream));
@@ -286,20 +288,33 @@ async function pollForOffer() {
       log(`Signaling poll failed: HTTP ${res.status}`, 'error');
     } else {
       const data = await res.json();
-      if (data.offer && peerConnection.signalingState !== 'have-local-offer') {
+      if (data.offer && !peerConnection.remoteDescription) {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+        // Flush any ICE candidates that arrived before the offer did
+        for (const c of pendingRemoteIce) {
+          try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(c));
+          } catch (iceErr) {
+            log(`Failed to add buffered ICE candidate: ${iceErr.message}`, 'error');
+          }
+        }
+        pendingRemoteIce = [];
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
         await sendAnswer(answer);
         log('WebRTC offer received, answer sent', 'success');
       }
-      // Process ICE candidates from admin
+      // Process ICE candidates from admin — buffer if the offer hasn't landed yet
       if (data.ice_candidates?.length) {
         for (const c of data.ice_candidates) {
-          try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(c));
-          } catch (iceErr) {
-            log(`Failed to add remote ICE candidate: ${iceErr.message}`, 'error');
+          if (peerConnection.remoteDescription) {
+            try {
+              await peerConnection.addIceCandidate(new RTCIceCandidate(c));
+            } catch (iceErr) {
+              log(`Failed to add remote ICE candidate: ${iceErr.message}`, 'error');
+            }
+          } else {
+            pendingRemoteIce.push(c);
           }
         }
       }
