@@ -426,22 +426,55 @@ async function startThumbnailStream(cameraId) {
   });
   
   // Poll for answer
-  pollForAnswer(cameraId, pc);
+  pollForAnswer(cameraId, pc, false);
 }
 
-async function pollForAnswer(cameraId, pc) {
-  while (pc.signalingState !== 'stable') {
+async function pollForAnswer(cameraId, pc, isModal = false) {
+  let attempts = 0;
+  const MAX_ATTEMPTS = 15; // Give up and retry after 15 seconds
+
+  while (pc.signalingState !== 'stable' && attempts < MAX_ATTEMPTS) {
     await new Promise(r => setTimeout(r, 1000));
+    attempts++;
+    
     try {
       const res = await fetch(`${API_BASE}/api/webrtc/poll_admin/${cameraId}`);
+      
+      // If the server returns 404, it forgot the camera during the handshake
+      if (res.status === 404) {
+        console.warn(`[Signaling] Server returned 404 for ${cameraId}. Handshake aborted.`);
+        break; // Force out of the loop to trigger a retry
+      }
+      
+      if (!res.ok) continue;
+
       const data = await res.json();
       if (data.answer) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         break;
       }
-    } catch {}
+    } catch (err) {}
   }
-  // Poll for ICE candidates from camera
+
+  // If we broke out of the loop and we STILL aren't stable, the handshake failed
+  if (pc.signalingState !== 'stable') {
+    console.log(`[Dashboard] Handshake failed for ${cameraId}. Forcing retry in 3s...`);
+    pc.close();
+    peerConnections.delete(cameraId);
+    
+    // Wait for the camera to finish its own re-registration, then retry
+    setTimeout(() => {
+      if (isModal && modalCameraId === cameraId) {
+        openModal(cameraId);
+      } else if (!isModal && document.querySelector(`[data-camera-id="${cameraId}"]`)) {
+        startThumbnailStream(cameraId);
+      }
+    }, 3000);
+    
+    return; // Stop execution here so we don't poll ICE candidates
+  }
+
+  // If successful, proceed to poll ICE candidates
   pollIceCandidates(cameraId, pc);
 }
 
@@ -571,7 +604,7 @@ async function openModal(cameraId) {
     body: JSON.stringify({ camera_id: cameraId, offer: offer.toJSON() })
   });
   
-  pollForAnswer(cameraId, pc);
+  pollForAnswer(cameraId, pc, true);
 }
 
 function closeModal() {
