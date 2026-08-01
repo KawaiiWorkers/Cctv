@@ -394,7 +394,11 @@ async function startThumbnailStream(cameraId) {
   
   pc.onconnectionstatechange = () => {
     const el = document.getElementById(`webrtc-${cameraId}`);
-    if (el) el.textContent = pc.connectionState === 'connected' ? '🔴 Live' : '⚪ Connecting...';
+    if (el) {
+      const state = pc.connectionState;
+      el.textContent = state === 'connected' ? '🔴 Live' : `⚪ ${state}`;
+    }
+    console.log(`[Thumbnail ${cameraId}] connectionState:`, pc.connectionState, 'iceConnectionState:', pc.iceConnectionState);
   };
   
   // Create offer
@@ -529,7 +533,7 @@ async function openModal(cameraId) {
   };
   
   pc.onconnectionstatechange = () => {
-    console.log('[Modal] WebRTC state:', pc.connectionState);
+    console.log('[Modal] WebRTC state:', pc.connectionState, 'ICE state:', pc.iceConnectionState);
   };
   
   // Create offer
