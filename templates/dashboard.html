@@ -274,7 +274,7 @@ function takeSnapshot() {
 // ─── CAMERA LIST & GRID ───
 async function fetchCameras() {
   try {
-    const res = await fetch(`${API_BASE}/api/admin/cameras`);
+    const res = await fetch(`${API_BASE}/api/cameras`);
     cameras = await res.json();
     renderCameraGrid();
     cameraCount.textContent = `${cameras.filter(c => c.status === 'ONLINE').length} online / ${cameras.length} total`;
@@ -305,8 +305,8 @@ function renderCameraGrid() {
           ${escapeHtml(cam.name)}
         </div>
         <div class="camera-meta">
-          <span>📍 ${escapeHtml(cam.ip)}</span>
-          <span id="webrtc-${cam.id}">${cam.webrtc_connected ? '🔴 Live' : '⚪ Idle'}</span>
+          <span>🆔 ${escapeHtml(cam.id)}</span>
+          <span id="webrtc-${cam.id}">⚪ Idle</span>
         </div>
         <div class="camera-meta" style="margin-top:0.5rem">
           <span class="ai-badge ${deviceMode === 'mobile' ? 'disabled' : ''}" id="ai-badge-${cam.id}">${deviceMode === 'desktop' ? '🧠 AI Active' : '💤 AI Off (Mobile Mode)'}</span>
@@ -360,7 +360,7 @@ async function startThumbnailStream(cameraId) {
   await pc.setLocalDescription(offer);
   
   // Send offer to server
-  await fetch(`${API_BASE}/api/admin/webrtc/offer`, {
+  await fetch(`${API_BASE}/api/webrtc/offer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ camera_id: cameraId, offer: offer.toJSON() })
@@ -374,7 +374,7 @@ async function pollForAnswer(cameraId, pc) {
   while (pc.signalingState !== 'stable') {
     await new Promise(r => setTimeout(r, 1000));
     try {
-      const res = await fetch(`${API_BASE}/api/admin/webrtc/answer/${cameraId}`);
+      const res = await fetch(`${API_BASE}/api/webrtc/poll_admin/${cameraId}`);
       const data = await res.json();
       if (data.answer) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
@@ -390,10 +390,10 @@ async function pollIceCandidates(cameraId, pc) {
   while (pc.connectionState !== 'closed' && pc.connectionState !== 'failed') {
     await new Promise(r => setTimeout(r, 2000));
     try {
-      const res = await fetch(`${API_BASE}/api/admin/webrtc/ice/${cameraId}`);
+      const res = await fetch(`${API_BASE}/api/webrtc/poll_admin/${cameraId}`);
       const data = await res.json();
-      if (data.candidates?.length) {
-        for (const c of data.candidates) {
+      if (data.ice_candidates?.length) {
+        for (const c of data.ice_candidates) {
           try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
         }
       }
@@ -402,10 +402,10 @@ async function pollIceCandidates(cameraId, pc) {
 }
 
 async function sendAdminIce(cameraId, candidate) {
-  await fetch(`${API_BASE}/api/admin/webrtc/ice`, {
+  await fetch(`${API_BASE}/api/webrtc/ice`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ camera_id: cameraId, candidate })
+    body: JSON.stringify({ camera_id: cameraId, candidate, target: 'admin' })
   });
 }
 
@@ -494,7 +494,7 @@ async function openModal(cameraId) {
   const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: false });
   await pc.setLocalDescription(offer);
   
-  await fetch(`${API_BASE}/api/admin/webrtc/offer`, {
+  await fetch(`${API_BASE}/api/webrtc/offer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ camera_id: cameraId, offer: offer.toJSON() })
