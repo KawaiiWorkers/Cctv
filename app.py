@@ -49,7 +49,7 @@ _cameras_lock = threading.RLock()
 _webrtc_signaling = {}  # camera_id -> {offer, answer, ice_candidates[]}
 _signaling_lock = threading.RLock()
 
-CAMERA_TIMEOUT = 30  # seconds
+CAMERA_TIMEOUT = 60  # seconds
 
 def prune_stale_cameras():
     while True:
