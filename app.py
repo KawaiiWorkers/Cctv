@@ -237,10 +237,15 @@ def upload_footage():
     if not camera_id or not video_file:
         return jsonify({'error': 'Missing camera_id or video file'}), 400
     
-    # Generate unique path: footages/{camera_id}/{YYYY-MM-DD}/{timestamp}_{chunk}.webm
+    # Generate unique path: footages/{camera_id}/{YYYY-MM-DD}/{timestamp}_{chunk}.<ext>
     dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
     date_path = dt.strftime('%Y-%m-%d')
-    filename = f"{dt.strftime('%H-%M-%S')}_{chunk_index}.webm"
+    orig_name = video_file.filename or ''
+    ext = orig_name.rsplit('.', 1)[-1].lower() if '.' in orig_name else 'webm'
+    if ext not in ('webm', 'mp4'):
+        ext = 'webm'
+    content_type = 'video/mp4' if ext == 'mp4' else 'video/webm'
+    filename = f"{dt.strftime('%H-%M-%S')}_{chunk_index}.{ext}"
     storage_path = f"{camera_id}/{date_path}/{filename}"
     
     try:
@@ -248,7 +253,7 @@ def upload_footage():
         supabase.storage.from_(SUPABASE_BUCKET).upload(
             storage_path,
             video_file.read(),
-            file_options={'content-type': 'video/webm', 'upsert': 'false'}
+            file_options={'content-type': content_type, 'upsert': 'false'}
         )
         return jsonify({'status': 'uploaded', 'path': storage_path})
     except Exception as e:
@@ -263,33 +268,52 @@ def list_footage():
     date = request.args.get('date')  # YYYY-MM-DD
     
     try:
-        prefix = ''
-        if camera_id:
-            prefix = f"{camera_id}/"
-            if date:
-                prefix += f"{date}/"
-        
-        res = supabase.storage.from_(SUPABASE_BUCKET).list(prefix)
         files = []
-        for item in res:
-            if item['name'].endswith('.webm'):
-                full_path = f"{prefix}{item['name']}" if prefix else item['name']
-                # Generate signed URL (1 hour expiry)
-                signed = supabase.storage.from_(SUPABASE_BUCKET).create_signed_url(full_path, 3600)
+
+        def collect(prefix, cam_id_for_result):
+            try:
+                items = supabase.storage.from_(SUPABASE_BUCKET).list(prefix)
+            except Exception as list_e:
+                app.logger.error(f'List failed for prefix "{prefix}": {list_e}')
+                return
+            for item in items:
+                name = item.get('name', '')
+                if not (name.endswith('.webm') or name.endswith('.mp4')):
+                    continue
+                full_path = f"{prefix}{name}" if prefix else name
+                try:
+                    signed = supabase.storage.from_(SUPABASE_BUCKET).create_signed_url(full_path, 3600)
+                    signed_url = signed.get('signedURL') or signed.get('signed_url')
+                except Exception as sub_e:
+                    app.logger.error(f'Signed URL failed for {full_path}: {sub_e}')
+                    continue
                 files.append({
                     'path': full_path,
-                    'name': item['name'],
+                    'name': name,
                     'size': item.get('metadata', {}).get('size', 0),
-                    'signed_url': signed.get('signedURL'),
-                    'camera_id': camera_id,
+                    'signed_url': signed_url,
+                    'camera_id': cam_id_for_result,
                     'date': date,
                 })
+
+        if camera_id:
+            prefix = f"{camera_id}/{date}/" if date else f"{camera_id}/"
+            collect(prefix, camera_id)
+        elif date:
+            # No camera selected but a date was — fan out across every known camera folder
+            with _cameras_lock:
+                known_ids = list(_cameras.keys())
+            for cid in known_ids:
+                collect(f"{cid}/{date}/", cid)
+        else:
+            collect('', None)
+
         # Sort newest first
         files.sort(key=lambda x: x['name'], reverse=True)
         return jsonify(files)
     except Exception as e:
         app.logger.error(f'List footage error: {e}')
-        return jsonify({'error': 'Failed to list footage'}), 500
+        return jsonify({'error': str(e)}), 500
 
 # ─── Secure footage streaming (proxy through backend) ───
 @app.route('/api/footage/stream/<path:storage_path>')
