@@ -310,8 +310,9 @@ def stream_footage(storage_path):
 # ─── Pages ───
 @app.route('/camera')
 def camera_page():
-    camera_id = request.args.get('camera_id')
-    return render_template('camera.html', camera_id=camera_id)
+    camera_id = request.args.get('camera_id') or str(uuid.uuid4())[:8]
+    camera_name = request.args.get('name') or f'Camera {camera_id}'
+    return render_template('camera.html', camera_id=camera_id, camera_name=camera_name)
 
 @app.route('/dashboard')
 @login_required
