@@ -308,7 +308,7 @@ def stream_footage(storage_path):
         return 'Not found', 404
 
 # ─── Pages ───
-@app.route('/camera.html')
+@app.route('/camera')
 def camera_page():
     camera_id = request.args.get('camera_id')
     return render_template('camera.html', camera_id=camera_id)
