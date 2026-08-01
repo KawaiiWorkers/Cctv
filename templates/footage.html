@@ -164,7 +164,7 @@ async function loadTensorFlow() {
 
 async function fetchCamerasForFilter() {
   try {
-    const res = await fetch(`${API_BASE}/api/admin/cameras`);
+    const res = await fetch(`${API_BASE}/api/cameras`);
     const cameras = await res.json();
     cameraFilter.innerHTML = '<option value="">All Cameras</option>' +
       cameras.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
@@ -184,12 +184,16 @@ async function fetchFootage() {
     if (cameraId) params.append('camera_id', cameraId);
     if (date) params.append('date', date);
     
-    const res = await fetch(`${API_BASE}/api/admin/footage/list?${params}`);
-    allFootage = await res.json();
+    const res = await fetch(`${API_BASE}/api/footage/list?${params}`);
+    const data = await res.json();
+    if (!res.ok || !Array.isArray(data)) {
+      throw new Error(data?.error || `HTTP ${res.status}`);
+    }
+    allFootage = data;
     renderFootageGrid();
   } catch (err) {
     console.error('[Footage] Fetch failed:', err);
-    footageGrid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><p>Failed to load footage</p></div>`;
+    footageGrid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><p>Failed to load footage: ${escapeHtml(err.message || String(err))}</p></div>`;
   }
 }
 
