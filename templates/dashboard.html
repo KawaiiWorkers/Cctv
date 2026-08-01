@@ -399,6 +399,19 @@ async function startThumbnailStream(cameraId) {
       el.textContent = state === 'connected' ? '🔴 Live' : `⚪ ${state}`;
     }
     console.log(`[Thumbnail ${cameraId}] connectionState:`, pc.connectionState, 'iceConnectionState:', pc.iceConnectionState);
+    
+    // Auto-reconnect logic for thumbnails
+    if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+      console.log(`[Thumbnail ${cameraId}] Connection lost. Reconnecting in 3 seconds...`);
+      pc.close();
+      peerConnections.delete(cameraId);
+      
+      setTimeout(() => {
+        if (document.querySelector(`[data-camera-id="${cameraId}"]`)) {
+          startThumbnailStream(cameraId);
+        }
+      }, 3000);
+    }
   };
   
   // Create offer
@@ -534,6 +547,18 @@ async function openModal(cameraId) {
   
   pc.onconnectionstatechange = () => {
     console.log('[Modal] WebRTC state:', pc.connectionState, 'ICE state:', pc.iceConnectionState);
+    
+    // Auto-reconnect logic for modal
+    if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+      console.log(`[Modal ${cameraId}] Connection lost. Attempting to reconnect...`);
+      if (modalCameraId === cameraId) {
+        setTimeout(() => {
+          if (modalCameraId === cameraId) {
+            openModal(cameraId);
+          }
+        }, 3000);
+      }
+    }
   };
   
   // Create offer
