@@ -248,8 +248,20 @@ async function initPeerConnection() {
   
   peerConnection.onicecandidate = (e) => {
     if (e.candidate) {
+      const type = e.candidate.type || 'unknown';
+      log(`ICE candidate gathered: ${type} (${e.candidate.protocol || '?'})`, 'info');
       sendIceCandidate('camera', e.candidate.toJSON());
+    } else {
+      log('ICE gathering complete', 'info');
     }
+  };
+
+  peerConnection.onicegatheringstatechange = () => {
+    log(`ICE gathering state: ${peerConnection.iceGatheringState}`, 'info');
+  };
+
+  peerConnection.oniceconnectionstatechange = () => {
+    log(`ICE connection state: ${peerConnection.iceConnectionState}`, 'info');
   };
   
   peerConnection.onconnectionstatechange = () => {
@@ -270,22 +282,30 @@ async function pollForOffer() {
   if (!peerConnection) return;
   try {
     const res = await fetch(`${API_BASE}/api/webrtc/poll/${CAMERA_ID}`);
-    const data = await res.json();
-    if (data.offer && peerConnection.signalingState !== 'have-local-offer') {
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      await sendAnswer(answer);
-      log('WebRTC offer received, answer sent', 'success');
-    }
-    // Process ICE candidates from admin
-    if (data.ice_candidates?.length) {
-      for (const c of data.ice_candidates) {
-        try { await peerConnection.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+    if (!res.ok) {
+      log(`Signaling poll failed: HTTP ${res.status}`, 'error');
+    } else {
+      const data = await res.json();
+      if (data.offer && peerConnection.signalingState !== 'have-local-offer') {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        await sendAnswer(answer);
+        log('WebRTC offer received, answer sent', 'success');
+      }
+      // Process ICE candidates from admin
+      if (data.ice_candidates?.length) {
+        for (const c of data.ice_candidates) {
+          try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(c));
+          } catch (iceErr) {
+            log(`Failed to add remote ICE candidate: ${iceErr.message}`, 'error');
+          }
+        }
       }
     }
   } catch (err) {
-    // Silent fail on poll
+    log(`Signaling poll error: ${err.message}`, 'error');
   }
   webrtcPollTimer = setTimeout(pollForOffer, WEBRTC_POLL_INTERVAL);
 }
