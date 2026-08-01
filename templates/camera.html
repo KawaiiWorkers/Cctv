@@ -286,6 +286,11 @@ async function pollForOffer() {
     const res = await fetch(`${API_BASE}/api/webrtc/poll/${CAMERA_ID}`);
     if (!res.ok) {
       log(`Signaling poll failed: HTTP ${res.status}`, 'error');
+      // FIX: If the server forgot the camera (404), re-register automatically
+      if (res.status === 404) {
+        log('Server forgot camera, attempting to re-register...', 'warn');
+        registerCamera();
+      }
     } else {
       const data = await res.json();
       if (data.offer && !peerConnection.remoteDescription) {
@@ -325,6 +330,7 @@ async function pollForOffer() {
   webrtcPollTimer = setTimeout(pollForOffer, WEBRTC_POLL_INTERVAL);
 }
 
+
 async function sendAnswer(answer) {
   await fetch(`${API_BASE}/api/webrtc/answer`, {
     method: 'POST',
@@ -363,11 +369,16 @@ async function registerCamera() {
 function startPingLoop() {
   async function ping() {
     try {
-      await fetch(`${API_BASE}/api/camera/ping`, {
+      const res = await fetch(`${API_BASE}/api/camera/ping`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ camera_id: CAMERA_ID })
       });
+      
+      // FIX: Catch a 404 on the heartbeat and re-register
+      if (res.status === 404) {
+        registerCamera();
+      }
     } catch {}
     pingTimer = setTimeout(ping, PING_INTERVAL);
   }
