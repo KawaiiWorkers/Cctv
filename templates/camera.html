@@ -131,17 +131,36 @@ async function initCamera() {
   }
 }
 
+function getSupportedMimeType() {
+  const candidates = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm;codecs=h264',
+    'video/webm',
+    'video/mp4;codecs=h264',
+    'video/mp4'
+  ];
+  for (const type of candidates) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return ''; // let the browser pick whatever it supports
+}
+
 function startRecording() {
   if (!mediaStream) return;
   try {
-    mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: VIDEO_BITRATE });
+    const mimeType = getSupportedMimeType();
+    const options = { videoBitsPerSecond: VIDEO_BITRATE };
+    if (mimeType) options.mimeType = mimeType;
+    log(`Using codec: ${mimeType || 'browser default'}`, 'info');
+    mediaRecorder = new MediaRecorder(mediaStream, options);
     
     mediaRecorder.ondataavailable = (e) => {
       if (e.data.size > 0) currentChunkBytes.push(e.data);
     };
     
     mediaRecorder.onstop = async () => {
-      const blob = new Blob(currentChunkBytes, { type: 'video/webm' });
+      const blob = new Blob(currentChunkBytes, { type: mediaRecorder.mimeType || 'video/webm' });
       currentChunkBytes = [];
       await uploadChunk(blob);
       if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -189,15 +208,16 @@ function startChunkTimer() {
 }
 
 async function uploadChunk(blob) {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const timestamp = new Date().toISOString();
+  const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
   const formData = new FormData();
   formData.append('camera_id', CAMERA_ID);
   formData.append('chunk_index', chunkIndex);
   formData.append('timestamp', timestamp);
-  formData.append('video', blob, `chunk_${chunkIndex}.webm`);
+  formData.append('video', blob, `chunk_${chunkIndex}.${ext}`);
   
   try {
-    const res = await fetch(`${API_BASE}/api/camera/upload_chunk`, { method: 'POST', body: formData });
+    const res = await fetch(`${API_BASE}/api/footage/upload`, { method: 'POST', body: formData });
     const data = await res.json();
     if (res.ok) {
       chunksUploaded++;
@@ -242,11 +262,7 @@ async function initPeerConnection() {
 async function pollForOffer() {
   if (!peerConnection) return;
   try {
-    const res = await fetch(`${API_BASE}/api/camera/ping`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ camera_id: CAMERA_ID })
-    });
+    const res = await fetch(`${API_BASE}/api/webrtc/poll/${CAMERA_ID}`);
     const data = await res.json();
     if (data.offer && peerConnection.signalingState !== 'have-local-offer') {
       await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
@@ -256,10 +272,8 @@ async function pollForOffer() {
       log('WebRTC offer received, answer sent', 'success');
     }
     // Process ICE candidates from admin
-    const iceRes = await fetch(`${API_BASE}/api/admin/webrtc/ice/${CAMERA_ID}`);
-    const iceData = await iceRes.json();
-    if (iceData.candidates?.length) {
-      for (const c of iceData.candidates) {
+    if (data.ice_candidates?.length) {
+      for (const c of data.ice_candidates) {
         try { await peerConnection.addIceCandidate(new RTCIceCandidate(c)); } catch {}
       }
     }
@@ -270,7 +284,7 @@ async function pollForOffer() {
 }
 
 async function sendAnswer(answer) {
-  await fetch(`${API_BASE}/api/camera/webrtc/answer`, {
+  await fetch(`${API_BASE}/api/webrtc/answer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ camera_id: CAMERA_ID, answer: answer.toJSON() })
@@ -278,10 +292,10 @@ async function sendAnswer(answer) {
 }
 
 async function sendIceCandidate(source, candidate) {
-  await fetch(`${API_BASE}/api/camera/webrtc/ice`, {
+  await fetch(`${API_BASE}/api/webrtc/ice`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ camera_id: CAMERA_ID, candidate })
+    body: JSON.stringify({ camera_id: CAMERA_ID, candidate, target: source })
   });
 }
 
